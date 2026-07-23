@@ -3,7 +3,7 @@ region: tor
 services:
   - name: api
     github:
-      repo: REPLACE_WITH_GITHUB_OWNER/REPLACE_WITH_REPOSITORY
+      repo: ZGM-Inc/media_receipt
       branch: main
       deploy_on_push: true
     dockerfile_path: Dockerfile
