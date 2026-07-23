@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.venv/
+
+# Generated processing outputs
+Output/
+
+# Runtime intake/routing folders
+Incoming/
+Processed/
+Error/
+Manual Review/
+Manual Enter - PO/
+Manual Enter - Multi-Job/
+Naming Errors/

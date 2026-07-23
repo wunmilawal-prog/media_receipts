@@ -1,0 +1,51 @@
+name: zgm-media-receipts-api
+region: tor
+services:
+  - name: api
+    github:
+      repo: REPLACE_WITH_GITHUB_OWNER/REPLACE_WITH_REPOSITORY
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    source_dir: /
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    health_check:
+      http_path: /api/health
+    routes:
+      - path: /
+    envs:
+      - key: FP_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_IN_DIGITALOCEAN
+      - key: DROPBOX_APP_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_IN_DIGITALOCEAN
+      - key: DROPBOX_APP_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_IN_DIGITALOCEAN
+      - key: DROPBOX_REFRESH_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_IN_DIGITALOCEAN
+      - key: DROPBOX_MEDIA_ROOT
+        scope: RUN_TIME
+        value: /Media Receipts
+      - key: MEDIA_API_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_FOR_LOCAL_OR_SERVER_TO_SERVER_ACCESS
+      - key: SUPABASE_JWT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_WITH_LOVABLE_SUPABASE_JWT_SECRET
+      - key: SUPABASE_JWT_AUDIENCE
+        scope: RUN_TIME
+        value: authenticated
+      - key: CORS_ORIGINS
+        scope: RUN_TIME
+        value: REPLACE_WITH_LOVABLE_URL
