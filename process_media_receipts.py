@@ -1100,14 +1100,40 @@ def _print_dry_run_preview(staging_root, remote_files):
         print("\nNo FP import row was generated.")
 
     print("\nProposed Dropbox routing:")
+    preview_results = []
+    unused_rows = list(import_rows)
     for entry in remote_files:
-        route = _local_route_for_file(staging_root, entry["name"])
-        print(f"  {entry['name']} → {route or 'Remain in Incoming'}")
+        filename = entry["name"]
+        route = _local_route_for_file(staging_root, filename)
+        matched_row = None
+
+        # Associate each generated row with its source invoice. Reference
+        # numbers are part of the required filename, making this deterministic
+        # for normal inputs. The ordered fallback covers unusual punctuation.
+        for row in unused_rows:
+            reference = str(row.get("Reference Number", "")).strip()
+            if reference and reference.casefold() in filename.casefold():
+                matched_row = row
+                break
+        if matched_row is None and route == "Processed" and unused_rows:
+            matched_row = unused_rows[0]
+        if matched_row is not None:
+            unused_rows.remove(matched_row)
+
+        print(f"  {filename} → {route or 'Remain in Incoming'}")
+        preview_results.append({
+            "filename": filename,
+            "route": route or "Remain in Incoming",
+            "row": matched_row,
+        })
 
     print("\nNo Dropbox outputs were uploaded and no source files were moved.")
+    # Machine-readable output used by the web API. Keeping it on one line
+    # avoids changing the human-readable CLI preview above.
+    print("ZGM_PREVIEW_JSON=" + json.dumps(preview_results, ensure_ascii=False))
 
 
-def process_dropbox_receipts(selected_filename=None, dry_run=False):
+def process_dropbox_receipts(selected_filenames=None, dry_run=False):
     """
     Process Dropbox Incoming files through a temporary local staging area.
 
@@ -1136,19 +1162,27 @@ def process_dropbox_receipts(selected_filename=None, dry_run=False):
     for entry in ignored_entries:
         print(f"  ⚠ Ignoring non-file entry in Incoming: {entry.get('name')}")
 
-    if selected_filename:
-        matches = [
-            entry for entry in remote_files
-            if entry.get("name", "").casefold() == selected_filename.casefold()
+    if selected_filenames:
+        requested = {name.casefold(): name for name in selected_filenames}
+        matches_by_name = {
+            entry.get("name", "").casefold(): entry for entry in remote_files
+        }
+        missing = [
+            original for normalized, original in requested.items()
+            if normalized not in matches_by_name
         ]
-        if not matches:
+        if missing:
             print(
-                f"\n✗ Dropbox Incoming does not contain the selected file:\n"
-                f"  {selected_filename}"
+                "\n✗ Dropbox Incoming does not contain the selected file(s):"
             )
+            for filename in missing:
+                print(f"  {filename}")
             print("No Dropbox files were changed.")
             return
-        remote_files = matches
+        # Preserve the selection order sent by the UI.
+        remote_files = [
+            matches_by_name[name.casefold()] for name in selected_filenames
+        ]
 
     if not remote_files:
         print("\nNo files found in Dropbox Incoming/.")
@@ -1676,8 +1710,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--file",
-        dest="selected_filename",
-        help="Process one exact filename from Dropbox Incoming.",
+        dest="selected_filenames",
+        action="append",
+        help=(
+            "Process an exact filename from Dropbox Incoming. Repeat --file "
+            "to process several selected invoices as one batch."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -1687,12 +1725,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.local:
-        if args.selected_filename or args.dry_run:
+        if args.selected_filenames or args.dry_run:
             parser.error("--file and --dry-run are currently Dropbox-only options")
         set_processing_root(SCRIPT_DIR)
         process_receipts()
     else:
         process_dropbox_receipts(
-            selected_filename=args.selected_filename,
+            selected_filenames=args.selected_filenames,
             dry_run=args.dry_run,
         )

@@ -30,12 +30,25 @@ python3 process_media_receipts.py \
   --dry-run
 ```
 
+Preview several selected invoices as one batch by repeating `--file`:
+
+```bash
+python3 process_media_receipts.py \
+  --file "Reddit - 3948018 CFMWS-3265.pdf" \
+  --file "Linkedin Ireland - 781215884582 CFMWS-3265.pdf" \
+  --dry-run
+```
+
 After reviewing the preview, process only that invoice:
 
 ```bash
 python3 process_media_receipts.py \
   --file "Reddit - 3948018 CFMWS-3265.pdf"
 ```
+
+When the API or CLI receives several `--file` selections, it downloads and
+processes them in one batch. The run creates one combined FP import CSV and one
+combined summary workbook, while routing each source invoice individually.
 
 ---
 
@@ -235,7 +248,7 @@ Lovable frontend:
 | `GET` | `/api/health` | DigitalOcean health check |
 | `GET` | `/api/invoices` | List files in Dropbox `Incoming/` |
 | `POST` | `/api/runs/preview` | Safely preview selected invoices |
-| `POST` | `/api/runs` | Start a real processing run |
+| `POST` | `/api/runs` | Process all selected invoices as one batch |
 | `GET` | `/api/runs/{run_id}` | Poll run status and results |
 
 Except for health, requests require `Authorization: Bearer <token>`. For local

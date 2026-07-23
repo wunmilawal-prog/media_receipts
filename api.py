@@ -8,8 +8,8 @@ temporary global folder configuration from the web server.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
-import re
 import secrets
 import sys
 import uuid
@@ -145,8 +145,10 @@ def _validate_selection(filenames: List[str], available: List[dict]) -> None:
         )
 
 
-async def _processor_command(filename: str, dry_run: bool) -> Tuple[int, str]:
-    command = [sys.executable, str(PROCESSOR), "--file", filename]
+async def _processor_command(filenames: List[str], dry_run: bool) -> Tuple[int, str]:
+    command = [sys.executable, str(PROCESSOR)]
+    for filename in filenames:
+        command.extend(["--file", filename])
     if dry_run:
         command.append("--dry-run")
     process = await asyncio.create_subprocess_exec(
@@ -159,41 +161,52 @@ async def _processor_command(filename: str, dry_run: bool) -> Tuple[int, str]:
     return process.returncode or 0, output.decode("utf-8", errors="replace")
 
 
-def _parse_preview(filename: str, returncode: int, output: str) -> PreviewItem:
-    if returncode != 0 or "No FP import row was generated." in output:
-        route_match = re.search(rf"{re.escape(filename)} → (.+)", output)
-        route = route_match.group(1).strip() if route_match else None
-        return PreviewItem(
-            filename=filename,
-            status="review" if returncode == 0 else "error",
-            route=route,
-            message="No import-ready row was generated.",
-        )
+def _parse_preview(
+    filenames: List[str], returncode: int, output: str
+) -> List[PreviewItem]:
+    marker = "ZGM_PREVIEW_JSON="
+    payload = None
+    for line in reversed(output.splitlines()):
+        if line.startswith(marker):
+            try:
+                payload = json.loads(line[len(marker):])
+            except json.JSONDecodeError:
+                payload = None
+            break
 
-    row: dict[str, str] = {}
-    in_row = False
-    route = None
-    for line in output.splitlines():
-        if line.startswith("Proposed FP import row "):
-            in_row = True
+    if returncode != 0 or payload is None:
+        return [
+            PreviewItem(
+                filename=filename,
+                status="error",
+                message="The batch preview failed or returned an invalid result.",
+            )
+            for filename in filenames
+        ]
+
+    results_by_name = {
+        item.get("filename", "").casefold(): item for item in payload
+    }
+    results = []
+    for filename in filenames:
+        item = results_by_name.get(filename.casefold())
+        if not item:
+            results.append(PreviewItem(
+                filename=filename,
+                status="error",
+                message="No preview result was returned for this invoice.",
+            ))
             continue
-        if in_row:
-            match = re.match(r"  ([^:]+):\s?(.*)$", line)
-            if match:
-                row[match.group(1)] = match.group(2)
-            elif line.strip():
-                in_row = False
-        route_match = re.match(rf"\s*{re.escape(filename)} → (.+)$", line)
-        if route_match:
-            route = route_match.group(1).strip()
-
-    return PreviewItem(
-        filename=filename,
-        status="ready" if row else "review",
-        route=route,
-        row=row or None,
-        message=None if row else "Preview output could not be parsed.",
-    )
+        row = item.get("row")
+        route = item.get("route")
+        results.append(PreviewItem(
+            filename=filename,
+            status="ready" if row and route == "Processed" else "review",
+            route=route,
+            row=row,
+            message=None if row else "No import-ready row was generated.",
+        ))
+    return results
 
 
 @app.get("/api/health")
@@ -235,33 +248,31 @@ async def preview(selection: Selection) -> List[PreviewItem]:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     _validate_selection(selection.filenames, available)
 
-    results = []
     async with RUN_LOCK:
-        for filename in selection.filenames:
-            returncode, output = await _processor_command(filename, dry_run=True)
-            results.append(_parse_preview(filename, returncode, output))
-    return results
+        returncode, output = await _processor_command(
+            selection.filenames, dry_run=True
+        )
+        return _parse_preview(selection.filenames, returncode, output)
 
 
 async def _execute_run(run_id: str) -> None:
     record = RUNS[run_id]
     record.status = "running"
     record.started_at = _now()
-    logs = []
     try:
         async with RUN_LOCK:
-            for filename in record.filenames:
-                returncode, output = await _processor_command(filename, dry_run=False)
-                logs.append(f"===== {filename} =====\n{output}")
-                if returncode != 0 or "Dropbox synchronization stopped" in output:
-                    raise RuntimeError(f"Processing failed for {filename}.")
+            returncode, output = await _processor_command(
+                record.filenames, dry_run=False
+            )
+            if returncode != 0 or "Dropbox synchronization stopped" in output:
+                raise RuntimeError("The selected invoice batch failed.")
         record.status = "succeeded"
         record.message = f"Processed {len(record.filenames)} invoice(s)."
     except Exception as exc:
         record.status = "failed"
         record.message = str(exc)
     finally:
-        record.log = "\n".join(logs)[-50000:]
+        record.log = output[-50000:] if "output" in locals() else ""
         record.finished_at = _now()
 
 
