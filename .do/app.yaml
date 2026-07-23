@@ -3,7 +3,7 @@ region: tor
 services:
   - name: api
     github:
-      repo: ZGM-Inc/media_receipt
+      repo: wunmilawal-prog/media_receipts
       branch: main
       deploy_on_push: true
     dockerfile_path: Dockerfile
