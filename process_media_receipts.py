@@ -1226,7 +1226,7 @@ def process_dropbox_receipts(selected_filenames=None, dry_run=False):
                 metadata = dropbox_upload_file(
                     access_token, local_output, remote_output
                 )
-                uploaded_outputs.append(metadata.get("path_display", remote_output))
+                uploaded_outputs.append(metadata)
 
             # Apply the local routing result to each original Dropbox file.
             moved_files = []
@@ -1253,6 +1253,10 @@ def process_dropbox_receipts(selected_filenames=None, dry_run=False):
                 print("  Files left in Incoming (no routing result):")
                 for name in unresolved_files:
                     print(f"    - {name}")
+            print(
+                "ZGM_OUTPUTS_JSON="
+                + json.dumps(uploaded_outputs, ensure_ascii=False)
+            )
 
         except (
             DropboxIntegrationError,

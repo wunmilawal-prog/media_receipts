@@ -250,6 +250,8 @@ Lovable frontend:
 | `POST` | `/api/runs/preview` | Safely preview selected invoices |
 | `POST` | `/api/runs` | Process all selected invoices as one batch |
 | `GET` | `/api/runs/{run_id}` | Poll run status and results |
+| `GET` | `/api/runs/{run_id}/files` | List generated Dropbox outputs |
+| `GET` | `/api/runs/{run_id}/files/{file_id}/download` | Download an output |
 
 Except for health, requests require `Authorization: Bearer <token>`. For local
 testing, the token can match `MEDIA_API_TOKEN`. In production, Lovable should
@@ -277,6 +279,11 @@ uvicorn api:app --reload --port 8080
 Open `http://localhost:8080/api/docs` to exercise the API. Preview is
 non-destructive. `POST /api/runs` is a live action and will upload outputs and
 move successfully processed Dropbox files.
+
+After a run succeeds, the frontend should call `/files` and display download
+buttons for the FP import, processing summary, and any review reports. Downloads
+are streamed from the official Dropbox copy; the API server does not retain a
+second permanent copy.
 
 ### DigitalOcean App Platform
 

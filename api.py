@@ -20,11 +20,16 @@ from typing import Dict, List, Literal, Optional, Tuple
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import jwt
+import requests
 
 from process_media_receipts import (
+    DROPBOX_CONTENT_URL,
+    DROPBOX_TIMEOUT_SECONDS,
     DropboxIntegrationError,
+    _dropbox_error,
     _dropbox_remote_path,
     dropbox_list_folder,
     get_dropbox_access_token,
@@ -85,7 +90,15 @@ class RunRecord(BaseModel):
     log: str = ""
 
 
+class RunFile(BaseModel):
+    id: str
+    name: str
+    kind: Literal["fp_import", "summary", "manual_review", "multi_job", "other"]
+    size: Optional[int] = None
+
+
 RUNS: Dict[str, RunRecord] = {}
+RUN_FILES: Dict[str, List[dict]] = {}
 RUN_LOCK = asyncio.Lock()
 
 
@@ -209,6 +222,53 @@ def _parse_preview(
     return results
 
 
+def _output_kind(filename: str) -> str:
+    if filename.startswith("FP_Import_"):
+        return "fp_import"
+    if filename.startswith("Processing_Summary_"):
+        return "summary"
+    if filename.startswith("ManualReview_"):
+        return "manual_review"
+    if filename.startswith("MultiJob_Summary_"):
+        return "multi_job"
+    return "other"
+
+
+def _parse_uploaded_files(output: str) -> List[dict]:
+    marker = "ZGM_OUTPUTS_JSON="
+    for line in reversed(output.splitlines()):
+        if not line.startswith(marker):
+            continue
+        try:
+            metadata_items = json.loads(line[len(marker):])
+        except json.JSONDecodeError:
+            return []
+        files = []
+        for metadata in metadata_items:
+            remote_path = metadata.get("path_display") or metadata.get("path_lower")
+            name = metadata.get("name")
+            if not remote_path or not name:
+                continue
+            files.append({
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "kind": _output_kind(name),
+                "size": metadata.get("size"),
+                "remote_path": remote_path,
+            })
+        return files
+    return []
+
+
+def _public_run_file(item: dict) -> RunFile:
+    return RunFile(
+        id=item["id"],
+        name=item["name"],
+        kind=item["kind"],
+        size=item.get("size"),
+    )
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "zgm-media-receipts"}
@@ -268,6 +328,7 @@ async def _execute_run(run_id: str) -> None:
                 raise RuntimeError("The selected invoice batch failed.")
         record.status = "succeeded"
         record.message = f"Processed {len(record.filenames)} invoice(s)."
+        RUN_FILES[run_id] = _parse_uploaded_files(output)
     except Exception as exc:
         record.status = "failed"
         record.message = str(exc)
@@ -301,6 +362,7 @@ async def start_run(selection: Selection, background_tasks: BackgroundTasks) -> 
         created_at=_now(),
     )
     RUNS[run_id] = record
+    RUN_FILES[run_id] = []
     background_tasks.add_task(_execute_run, run_id)
     return record
 
@@ -315,3 +377,72 @@ def get_run(run_id: str) -> RunRecord:
     if not record:
         raise HTTPException(status_code=404, detail="Run not found.")
     return record
+
+
+@app.get(
+    "/api/runs/{run_id}/files",
+    response_model=List[RunFile],
+    dependencies=[Depends(require_api_token)],
+)
+def list_run_files(run_id: str) -> List[RunFile]:
+    record = RUNS.get(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    if record.status in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="The run is not finished yet.")
+    return [_public_run_file(item) for item in RUN_FILES.get(run_id, [])]
+
+
+@app.get(
+    "/api/runs/{run_id}/files/{file_id}/download",
+    dependencies=[Depends(require_api_token)],
+)
+def download_run_file(run_id: str, file_id: str) -> StreamingResponse:
+    record = RUNS.get(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    item = next(
+        (
+            candidate for candidate in RUN_FILES.get(run_id, [])
+            if candidate["id"] == file_id
+        ),
+        None,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Run output file not found.")
+
+    try:
+        access_token = get_dropbox_access_token()
+        response = requests.post(
+            f"{DROPBOX_CONTENT_URL}/files/download",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Dropbox-API-Arg": json.dumps({"path": item["remote_path"]}),
+            },
+            timeout=DROPBOX_TIMEOUT_SECONDS,
+            stream=True,
+        )
+        _dropbox_error(response, f"download {item['remote_path']}")
+    except (DropboxIntegrationError, requests.RequestException) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    media_type = (
+        "text/csv; charset=utf-8"
+        if item["name"].lower().endswith(".csv")
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    def content():
+        try:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            response.close()
+
+    safe_name = item["name"].replace('"', "")
+    return StreamingResponse(
+        content(),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
