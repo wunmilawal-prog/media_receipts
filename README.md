@@ -247,6 +247,7 @@ Lovable frontend:
 |--------|----------|---------|
 | `GET` | `/api/health` | DigitalOcean health check |
 | `GET` | `/api/invoices` | List files in Dropbox `Incoming/` |
+| `POST` | `/api/invoices/upload` | Upload PDF invoices to Dropbox `Incoming/` |
 | `POST` | `/api/runs/preview` | Safely preview selected invoices |
 | `POST` | `/api/runs` | Process all selected invoices as one batch |
 | `GET` | `/api/runs/{run_id}` | Poll run status and results |
@@ -266,6 +267,14 @@ Request bodies for preview and processing use:
   "filenames": ["Reddit - 3948018 CFMWS-3265.pdf"]
 }
 ```
+
+Invoice upload uses `multipart/form-data` with one or more fields named
+`files`. The default limits are 20 files per request and 25 MB per file.
+Uploads are saved to Dropbox `Incoming/` but are not automatically previewed or
+processed. Duplicate filenames, non-PDF files, unsafe paths, and oversized
+files are rejected individually. A filename without a recognizable job code is
+accepted with a warning so the normal preview/process flow can route it for
+review.
 
 Run locally:
 

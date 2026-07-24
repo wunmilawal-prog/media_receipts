@@ -18,7 +18,15 @@ from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -33,6 +41,7 @@ from process_media_receipts import (
     _dropbox_remote_path,
     dropbox_list_folder,
     get_dropbox_access_token,
+    validate_filename,
 )
 
 
@@ -65,6 +74,21 @@ class Invoice(BaseModel):
     name: str
     size: Optional[int] = None
     modified_at: Optional[str] = None
+
+
+class InvoiceUploadResult(BaseModel):
+    name: str
+    status: Literal["uploaded", "rejected", "failed"]
+    size: Optional[int] = None
+    message: str
+    warnings: List[str] = Field(default_factory=list)
+
+
+class InvoiceUploadResponse(BaseModel):
+    uploaded: int
+    rejected: int
+    failed: int
+    results: List[InvoiceUploadResult]
 
 
 class Selection(BaseModel):
@@ -156,6 +180,63 @@ def _validate_selection(filenames: List[str], available: List[dict]) -> None:
             status_code=404,
             detail={"message": "Invoice is no longer in Incoming.", "files": missing},
         )
+
+
+def _safe_upload_filename(filename: Optional[str]) -> Tuple[Optional[str], str]:
+    name = (filename or "").strip()
+    if not name:
+        return None, "The uploaded file has no filename."
+    if (
+        name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+        or "\x00" in name
+        or any(ord(character) < 32 for character in name)
+    ):
+        return None, "The filename contains an unsafe path or control character."
+    if len(name) > 255:
+        return None, "The filename is longer than 255 characters."
+    if not name.lower().endswith(".pdf"):
+        return None, "Only PDF invoices are accepted."
+    return name, ""
+
+
+async def _read_upload_limited(upload: UploadFile, maximum_bytes: int) -> bytes:
+    chunks = []
+    total = 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > maximum_bytes:
+            raise ValueError(
+                f"The file exceeds the {maximum_bytes // (1024 * 1024)} MB limit."
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _upload_invoice_bytes(
+    access_token: str, remote_path: str, content: bytes
+) -> dict:
+    response = requests.post(
+        f"{DROPBOX_CONTENT_URL}/files/upload",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/octet-stream",
+            "Dropbox-API-Arg": json.dumps({
+                "path": remote_path,
+                "mode": "add",
+                "autorename": False,
+                "mute": False,
+            }),
+        },
+        data=content,
+        timeout=DROPBOX_TIMEOUT_SECONDS,
+    )
+    _dropbox_error(response, f"upload {remote_path}")
+    return response.json()
 
 
 async def _processor_command(filenames: List[str], dry_run: bool) -> Tuple[int, str]:
@@ -292,6 +373,115 @@ def invoices() -> List[Invoice]:
         )
         for entry in sorted(entries, key=lambda item: item["name"].casefold())
     ]
+
+
+@app.post(
+    "/api/invoices/upload",
+    response_model=InvoiceUploadResponse,
+    dependencies=[Depends(require_api_token)],
+)
+async def upload_invoices(
+    files: List[UploadFile] = File(...),
+) -> InvoiceUploadResponse:
+    maximum_files = int(os.getenv("MAX_UPLOAD_FILES", "20"))
+    maximum_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+    if not files:
+        raise HTTPException(status_code=400, detail="Select at least one PDF.")
+    if len(files) > maximum_files:
+        raise HTTPException(
+            status_code=413,
+            detail=f"A maximum of {maximum_files} invoices can be uploaded at once.",
+        )
+    if RUN_LOCK.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the active preview or processing run to finish.",
+        )
+
+    try:
+        existing = await asyncio.to_thread(_dropbox_incoming_files)
+        access_token = await asyncio.to_thread(get_dropbox_access_token)
+    except DropboxIntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    root = os.getenv("DROPBOX_MEDIA_ROOT", "/Media Receipts").strip().strip('"')
+    incoming_root = _dropbox_remote_path(root, "Incoming")
+    reserved_names = {
+        entry.get("name", "").casefold()
+        for entry in existing
+        if entry.get("name")
+    }
+    results = []
+
+    async with RUN_LOCK:
+        for upload in files:
+            safe_name, filename_error = _safe_upload_filename(upload.filename)
+            display_name = safe_name or upload.filename or "unnamed file"
+            if filename_error:
+                results.append(InvoiceUploadResult(
+                    name=display_name,
+                    status="rejected",
+                    message=filename_error,
+                ))
+                await upload.close()
+                continue
+            if safe_name.casefold() in reserved_names:
+                results.append(InvoiceUploadResult(
+                    name=safe_name,
+                    status="rejected",
+                    message="A file with this name already exists in Dropbox Incoming.",
+                ))
+                await upload.close()
+                continue
+
+            try:
+                content = await _read_upload_limited(upload, maximum_bytes)
+                if not content.startswith(b"%PDF-"):
+                    results.append(InvoiceUploadResult(
+                        name=safe_name,
+                        status="rejected",
+                        size=len(content),
+                        message="The file does not contain a valid PDF header.",
+                    ))
+                    continue
+                is_valid_name, naming_issues = validate_filename(safe_name)
+                warnings = [] if is_valid_name else naming_issues
+                remote_path = _dropbox_remote_path(incoming_root, safe_name)
+                metadata = await asyncio.to_thread(
+                    _upload_invoice_bytes,
+                    access_token,
+                    remote_path,
+                    content,
+                )
+                reserved_names.add(safe_name.casefold())
+                results.append(InvoiceUploadResult(
+                    name=metadata.get("name", safe_name),
+                    status="uploaded",
+                    size=metadata.get("size", len(content)),
+                    message="Uploaded to Dropbox Incoming.",
+                    warnings=warnings,
+                ))
+            except ValueError as exc:
+                results.append(InvoiceUploadResult(
+                    name=safe_name,
+                    status="rejected",
+                    message=str(exc),
+                ))
+            except (DropboxIntegrationError, requests.RequestException) as exc:
+                results.append(InvoiceUploadResult(
+                    name=safe_name,
+                    status="failed",
+                    message=str(exc),
+                ))
+            finally:
+                await upload.close()
+
+    return InvoiceUploadResponse(
+        uploaded=sum(result.status == "uploaded" for result in results),
+        rejected=sum(result.status == "rejected" for result in results),
+        failed=sum(result.status == "failed" for result in results),
+        results=results,
+    )
 
 
 @app.post(
