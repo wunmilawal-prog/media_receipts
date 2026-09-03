@@ -447,6 +447,21 @@ def extract_date(filename, text):
     if not text:
         return "N/A", "LOW"
 
+    # Tabular broadcast invoices put labels on one row and values on the next.
+    # Read this before removing invoice-period headers below.
+    table_date = re.search(
+        r'Invoice\s*#\s+Invoice\s+Date[^\n]*\n[^\n]*?'
+        r'\b[A-Z0-9][A-Z0-9-]*\d\s+(\d{2}/\d{2}/\d{2})\b',
+        text,
+        re.IGNORECASE,
+    )
+    if table_date:
+        try:
+            dt = datetime.strptime(table_date.group(1), '%m/%d/%y')
+            return dt.strftime('%m-%d-%Y'), "HIGH"
+        except ValueError:
+            pass
+
     # Strip lines whose labels indicate a date range or period — not the invoice date.
     # "Invoice Period", "Flight Dates", "Air Dates" etc. are schedule metadata, not billing dates.
     IGNORE_DATE_LABELS = [
