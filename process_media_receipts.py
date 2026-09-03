@@ -134,6 +134,9 @@ SUPPLIER_MAP = {
     "oilers":                         ("OiEnGro",       "Oilers Entertainment Group",       TAX_GROUP_GST),
     # ── Television ────────────────────────────────────────────────────────────────────────────────
     "cbxt":                           ("CBXT",          "CBXT",                             TAX_GROUP_GST),
+    # CTV Edmonton invoices are entered against the CFRN station expense in FP.
+    # Keep this before the broader CTV rule.
+    "ctv edmonton":                   ("CFRN",          "CFRN",                             TAX_GROUP_GST),
     "ctv":                            ("CTVC",          "CTV",                              TAX_GROUP_GST),
     "global television":              ("GT",            "Global Television",                TAX_GROUP_GST),
     # ── Radio ─────────────────────────────────────────────────────────────────────────────────────
@@ -366,10 +369,6 @@ def detect_supplier(filename, text, fp_codes):
         if keyword in filename_lower:
             return fp_code, display_name, tax_group, "HIGH"
 
-    for keyword, (fp_code, display_name, tax_group) in SUPPLIER_MAP.items():
-        if keyword in text_lower:
-            return fp_code, display_name, tax_group, "LOW"
-
     # Resolve the supplier portion parsed before the invoice number. Never use
     # the whole pre-job string, which can include invoice IDs and dates.
     supplier_hint, _, _ = parse_filename_components(filename)
@@ -377,6 +376,12 @@ def detect_supplier(filename, text, fp_codes):
     if matched_supplier:
         code, display_name = matched_supplier
         return code, display_name, TAX_GROUP_NONE, "HIGH"
+
+    # Parent-company names in invoice bodies are weaker than an unambiguous
+    # filename supplier. Use PDF text only after filename resolution fails.
+    for keyword, (fp_code, display_name, tax_group) in SUPPLIER_MAP.items():
+        if keyword in text_lower:
+            return fp_code, display_name, tax_group, "LOW"
 
     # Last resort: try matching against full FP supplier list
     for name_lower, code in fp_codes.items():
@@ -522,6 +527,22 @@ def extract_date(filename, text):
                 except ValueError:
                     continue
             return raw, "MEDIUM"
+
+    # Some station invoices have an incomplete/unreadable PDF text layer but
+    # include a clear date in their filename. Treat this as a fallback rather
+    # than overriding a date found on the invoice itself.
+    filename_text = os.path.splitext(filename)[0].replace('_', ' ')
+    for pat, fmts in patterns:
+        m = re.search(pat, filename_text, re.IGNORECASE)
+        if not m:
+            continue
+        raw = m.group(1).strip()
+        for fmt in fmts:
+            try:
+                dt = datetime.strptime(raw, fmt)
+                return dt.strftime('%m-%d-%Y'), "MEDIUM"
+            except ValueError:
+                continue
 
     return "N/A", "LOW"
 
