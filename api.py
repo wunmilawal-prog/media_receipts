@@ -273,11 +273,19 @@ def _parse_preview(
             break
 
     if returncode != 0 or payload is None:
+        failure_detail = next(
+            (
+                line.lstrip("✗ ").strip()
+                for line in reversed(output.splitlines())
+                if line.strip().startswith("✗")
+            ),
+            "The batch preview failed or returned an invalid result.",
+        )
         return [
             PreviewItem(
                 filename=filename,
                 status="error",
-                message="The batch preview failed or returned an invalid result.",
+                message=failure_detail,
             )
             for filename in filenames
         ]
@@ -305,7 +313,9 @@ def _parse_preview(
             status="ready" if row and is_processed_route else "review",
             route=route,
             row=row,
-            message=None if row else "No import-ready row was generated.",
+            message=None if row else (
+                item.get("message") or "No import-ready row was generated."
+            ),
         ))
     return results
 

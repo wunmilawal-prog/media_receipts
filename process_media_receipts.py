@@ -1122,12 +1122,24 @@ def _print_dry_run_preview(staging_root, remote_files):
     print("=" * 65)
 
     import_rows = []
+    review_details = {}
     for output_name in sorted(os.listdir(OUTPUT_FOLDER)):
-        if not output_name.startswith("FP_Import_") or not output_name.endswith(".csv"):
+        if not output_name.endswith(".csv"):
             continue
         output_path = os.path.join(OUTPUT_FOLDER, output_name)
-        with open(output_path, newline="", encoding="utf-8") as input_file:
-            import_rows.extend(csv.DictReader(input_file))
+        if output_name.startswith("FP_Import_"):
+            with open(output_path, newline="", encoding="utf-8") as input_file:
+                import_rows.extend(csv.DictReader(input_file))
+        elif output_name.startswith("ManualReview_"):
+            with open(output_path, newline="", encoding="utf-8") as input_file:
+                for review in csv.DictReader(input_file):
+                    filename = str(review.get("file", "")).casefold()
+                    if filename:
+                        review_details[filename] = (
+                            review.get("fp_lookup_error")
+                            or review.get("flags")
+                            or "This invoice requires manual review."
+                        )
 
     if import_rows:
         for row_number, row in enumerate(import_rows, start=1):
@@ -1163,6 +1175,7 @@ def _print_dry_run_preview(staging_root, remote_files):
             "filename": filename,
             "route": route or "Remain in Incoming",
             "row": matched_row,
+            "message": review_details.get(filename.casefold()),
         })
 
     print("\nNo Dropbox outputs were uploaded and no source files were moved.")
@@ -1454,7 +1467,7 @@ def process_receipts():
                 fp_expense_match = match_supplier_to_function_point_expense(
                     fp_job, fp_code, supplier_display
                 )
-            except FunctionPointLookupError as exc:
+            except (FunctionPointLookupError, FunctionPointServiceError) as exc:
                 fp_lookup_error = str(exc)
                 flags.append("FP_LOOKUP_FAILED")
 
