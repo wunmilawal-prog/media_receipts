@@ -74,6 +74,8 @@ Dandelion INV-13174 - Dec-25 - breakdown Susila.pdf
 
 Spaces around a job-code hyphen are normalized automatically. All of these are
 treated as `FOR-3412`: `FOR-3412`, `FOR - 3412`, `FOR -3412`, and `FOR 3412`.
+Common filename separators such as underscores are also accepted around the
+job code, so `_JAY - 3313` is normalized to `JAY-3313`.
 `GET /api/invoices` validates filenames before preview and returns
 `naming_valid`, `naming_issues`, and normalized `job_codes` for the frontend.
 

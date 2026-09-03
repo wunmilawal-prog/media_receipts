@@ -159,7 +159,9 @@ SUPPLIER_MAP = {
 # Intentionally excludes: 5-digit numbers (BOX-12814, CA-94025),
 # 3-digit numbers (CAD-198), and known non-job prefixes (INV-, RT-, TQ-)
 JOB_CODE_PATTERN = re.compile(
-    r'\b([A-Z]{2,6}(?:[ \t]*-[ \t]*|[ \t]+)[0-9]{4})\b'
+    r'(?<![A-Z0-9])'
+    r'([A-Z]{2,6}(?:[ \t]*-[ \t]*|[ \t]+)[0-9]{4})'
+    r'(?![0-9])'
 )
 
 # Prefixes that are invoice/reference numbers or media terms — NOT job codes
