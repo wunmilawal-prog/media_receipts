@@ -162,7 +162,7 @@ def require_api_token(authorization: Optional[str] = Header(default=None)) -> No
 
 
 def _dropbox_incoming_files() -> List[dict]:
-    root = os.getenv("DROPBOX_MEDIA_ROOT", "/Media Receipts").strip().strip('"')
+    root = os.getenv("DROPBOX_MEDIA_ROOT", "/Automation Testing").strip().strip('"')
     incoming = _dropbox_remote_path(root, "Incoming")
     token = get_dropbox_access_token()
     return [
@@ -293,9 +293,12 @@ def _parse_preview(
             continue
         row = item.get("row")
         route = item.get("route")
+        is_processed_route = bool(
+            route == "Processed" or str(route or "").startswith("Processed/")
+        )
         results.append(PreviewItem(
             filename=filename,
-            status="ready" if row and route == "Processed" else "review",
+            status="ready" if row and is_processed_route else "review",
             route=route,
             row=row,
             message=None if row else "No import-ready row was generated.",
@@ -404,7 +407,7 @@ async def upload_invoices(
     except DropboxIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    root = os.getenv("DROPBOX_MEDIA_ROOT", "/Media Receipts").strip().strip('"')
+    root = os.getenv("DROPBOX_MEDIA_ROOT", "/Automation Testing").strip().strip('"')
     incoming_root = _dropbox_remote_path(root, "Incoming")
     reserved_names = {
         entry.get("name", "").casefold()

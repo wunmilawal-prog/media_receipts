@@ -26,6 +26,7 @@ import argparse
 import pdfplumber
 import requests
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -44,16 +45,24 @@ DROPBOX_API_BASE_URL   = "https://api.dropboxapi.com/2"
 DROPBOX_CONTENT_URL    = "https://content.dropboxapi.com/2"
 DROPBOX_TIMEOUT_SECONDS = 60
 
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Edmonton")
+RUN_STARTED_AT = datetime.now(ZoneInfo(APP_TIMEZONE))
+RUN_MONTH_FOLDER = RUN_STARTED_AT.strftime("%b %Y")
+TIMESTAMP = RUN_STARTED_AT.strftime("%b_%Y_%d_%H%M%S")
+
 
 def set_processing_root(root_folder):
     """Point all operational folders at a local processing root."""
     global INCOMING_FOLDER, PROCESSED_FOLDER, OUTPUT_FOLDER, ERROR_FOLDER
+    global PROCESSED_BASE_FOLDER, OUTPUT_BASE_FOLDER
     global MANUAL_REVIEW_FOLDER, MANUAL_PO_FOLDER, MANUAL_MULTI_FOLDER
     global NAMING_ERRORS_FOLDER
 
     INCOMING_FOLDER        = os.path.join(root_folder, "Incoming")
-    PROCESSED_FOLDER       = os.path.join(root_folder, "Processed")
-    OUTPUT_FOLDER          = os.path.join(root_folder, "Output")
+    PROCESSED_BASE_FOLDER  = os.path.join(root_folder, "Processed")
+    OUTPUT_BASE_FOLDER     = os.path.join(root_folder, "Output")
+    PROCESSED_FOLDER       = os.path.join(PROCESSED_BASE_FOLDER, RUN_MONTH_FOLDER)
+    OUTPUT_FOLDER          = os.path.join(OUTPUT_BASE_FOLDER, RUN_MONTH_FOLDER)
     ERROR_FOLDER           = os.path.join(root_folder, "Error")
     MANUAL_REVIEW_FOLDER   = os.path.join(root_folder, "Manual Review")
     MANUAL_PO_FOLDER       = os.path.join(root_folder, "Manual Enter - PO")
@@ -62,8 +71,6 @@ def set_processing_root(root_folder):
 
 
 set_processing_root(SCRIPT_DIR)
-
-TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 # ─── FP Import Defaults ───────────────────────────────────────────────────────
 # These defaults can be adjusted to match your FP configuration.
@@ -1049,6 +1056,29 @@ def dropbox_upload_file(access_token, local_path, remote_path):
     return response.json()
 
 
+def dropbox_ensure_folder(access_token, remote_folder):
+    """Create a Dropbox folder when missing; accept an existing folder."""
+    response = requests.post(
+        f"{DROPBOX_API_BASE_URL}/files/create_folder_v2",
+        headers=_dropbox_api_headers(access_token),
+        json={"path": remote_folder, "autorename": False},
+        timeout=DROPBOX_TIMEOUT_SECONDS,
+    )
+    if response.ok:
+        return response.json()
+
+    # Dropbox reports an existing folder as a 409 path/conflict/folder error.
+    if response.status_code == 409:
+        try:
+            error_summary = response.json().get("error_summary", "")
+        except ValueError:
+            error_summary = ""
+        if error_summary.startswith("path/conflict/folder"):
+            return None
+
+    _dropbox_error(response, f"create folder {remote_folder}")
+
+
 def dropbox_move_file(access_token, from_path, to_path):
     """Move an Incoming Dropbox file to its processing destination."""
     response = requests.post(
@@ -1069,10 +1099,14 @@ def dropbox_move_file(access_token, from_path, to_path):
 
 def _local_route_for_file(staging_root, filename):
     """Return the processing destination selected in local staging."""
-    for folder in DROPBOX_ROUTE_FOLDERS:
-        candidate = os.path.join(staging_root, folder, filename)
+    routes = [
+        ("Processed", RUN_MONTH_FOLDER),
+        *((folder,) for folder in DROPBOX_ROUTE_FOLDERS if folder != "Processed"),
+    ]
+    for route_parts in routes:
+        candidate = os.path.join(staging_root, *route_parts, filename)
         if os.path.exists(candidate):
-            return folder
+            return "/".join(route_parts)
     return None
 
 
@@ -1140,7 +1174,7 @@ def process_dropbox_receipts(selected_filenames=None, dry_run=False):
     Generated outputs are uploaded before any source invoice is moved remotely.
     This keeps the Dropbox Incoming copy intact if processing or upload fails.
     """
-    remote_root = os.getenv("DROPBOX_MEDIA_ROOT", "/Media Receipts")
+    remote_root = os.getenv("DROPBOX_MEDIA_ROOT", "/Automation Testing")
     remote_root = remote_root.strip().strip('"')
     remote_incoming = _dropbox_remote_path(remote_root, "Incoming")
 
@@ -1215,12 +1249,19 @@ def process_dropbox_receipts(selected_filenames=None, dry_run=False):
 
             # Upload every generated report before moving any source invoice.
             uploaded_outputs = []
+            remote_output_folder = _dropbox_remote_path(
+                remote_root, "Output", RUN_MONTH_FOLDER
+            )
+            dropbox_ensure_folder(
+                access_token, _dropbox_remote_path(remote_root, "Output")
+            )
+            dropbox_ensure_folder(access_token, remote_output_folder)
             for output_name in sorted(os.listdir(OUTPUT_FOLDER)):
                 local_output = os.path.join(OUTPUT_FOLDER, output_name)
                 if not os.path.isfile(local_output):
                     continue
                 remote_output = _dropbox_remote_path(
-                    remote_root, "Output", output_name
+                    remote_output_folder, output_name
                 )
                 print(f"  Uploading output: {output_name}")
                 metadata = dropbox_upload_file(
@@ -1239,6 +1280,15 @@ def process_dropbox_receipts(selected_filenames=None, dry_run=False):
                     continue
 
                 from_path = entry.get("path_lower") or entry["id"]
+                remote_destination = _dropbox_remote_path(
+                    remote_root, destination
+                )
+                if destination == f"Processed/{RUN_MONTH_FOLDER}":
+                    dropbox_ensure_folder(
+                        access_token,
+                        _dropbox_remote_path(remote_root, "Processed"),
+                    )
+                dropbox_ensure_folder(access_token, remote_destination)
                 to_path = _dropbox_remote_path(
                     remote_root, destination, entry["name"]
                 )
@@ -1515,7 +1565,10 @@ def process_receipts():
             writer = csv.DictWriter(f, fieldnames=fp_columns)
             writer.writeheader()
             writer.writerows(fp_rows)
-        print(f"  ✓ FP Import CSV: Output/FP_Import_{TIMESTAMP}.csv")
+        print(
+            f"  ✓ FP Import CSV: Output/{RUN_MONTH_FOLDER}/"
+            f"FP_Import_{TIMESTAMP}.csv"
+        )
         print(f"    ({len(fp_rows)} line(s) ready for FunctionPointe import)")
 
     # ── Output: Multi-Job Summary ─────────────────────────────────────────────
@@ -1525,7 +1578,10 @@ def process_receipts():
             writer = csv.DictWriter(f, fieldnames=multi_job_files[0].keys())
             writer.writeheader()
             writer.writerows(multi_job_files)
-        print(f"  ✓ Multi-Job Summary: Output/MultiJob_Summary_{TIMESTAMP}.csv")
+        print(
+            f"  ✓ Multi-Job Summary: Output/{RUN_MONTH_FOLDER}/"
+            f"MultiJob_Summary_{TIMESTAMP}.csv"
+        )
         print(f"    ({len(multi_job_files)} invoice(s) need manual job splitting)")
 
     # ── Output: Manual Review ─────────────────────────────────────────────────
@@ -1535,12 +1591,18 @@ def process_receipts():
             writer = csv.DictWriter(f, fieldnames=manual_review[0].keys())
             writer.writeheader()
             writer.writerows(manual_review)
-        print(f"  ✓ Manual Review: Output/ManualReview_{TIMESTAMP}.csv")
+        print(
+            f"  ✓ Manual Review: Output/{RUN_MONTH_FOLDER}/"
+            f"ManualReview_{TIMESTAMP}.csv"
+        )
 
     # ── Output: Processing Summary XLSX ──────────────────────────────────────
     summary_xlsx = os.path.join(OUTPUT_FOLDER, f"Processing_Summary_{TIMESTAMP}.xlsx")
     _write_summary_xlsx(summary_xlsx, summary_rows, fp_rows, multi_job_files, manual_review, errors, naming_errors)
-    print(f"  ✓ Summary Report: Output/Processing_Summary_{TIMESTAMP}.xlsx")
+    print(
+        f"  ✓ Summary Report: Output/{RUN_MONTH_FOLDER}/"
+        f"Processing_Summary_{TIMESTAMP}.xlsx"
+    )
 
     # ── Final Report ──────────────────────────────────────────────────────────
     print()

@@ -6,12 +6,12 @@ Automates extraction and FunctionPointe import preparation for ZGM media invoice
 
 ## Quick Start
 
-1. Drop PDF invoices into **`/Media Receipts/Incoming`** in Dropbox
+1. Drop PDF invoices into **`/Automation Testing/Incoming`** in Dropbox
 2. Run the script:
    ```
    python3 process_media_receipts.py
    ```
-3. Upload **`/Media Receipts/Output/FP_Import_*.csv`** into FunctionPointe
+3. Upload the monthly **`/Automation Testing/Output/<Mon YYYY>/FP_Import_*.csv`** into FunctionPointe
 4. Handle anything in the Dropbox **`Manual Enter - Multi-Job/`** or
    **`Manual Review/`** folders
 
@@ -79,14 +79,16 @@ Files with incorrect naming are moved to `Naming Errors/` and logged.
 ## Dropbox Folder Structure
 
 ```
-Media Receipts/
+Automation Testing/
 ├── Incoming/                   ← Drop new invoices here
-├── Processed/                  ← Successfully processed (FP import generated)
-├── Output/                     ← Generated CSVs and summary reports
-│   ├── FP_Import_*.csv         ← Upload directly to FunctionPointe
-│   ├── MultiJob_Summary_*.csv  ← Reference for manual multi-job entry
-│   ├── ManualReview_*.csv      ← Items needing human verification
-│   └── Processing_Summary_*.xlsx ← Full run report with colour coding
+├── Processed/
+│   └── Sep 2026/              ← Successfully processed during the run month
+├── Output/
+│   └── Sep 2026/              ← Generated reports grouped by run month
+│       ├── FP_Import_Sep_2026_*.csv
+│       ├── MultiJob_Summary_Sep_2026_*.csv
+│       ├── ManualReview_Sep_2026_*.csv
+│       └── Processing_Summary_Sep_2026_*.xlsx
 ├── Manual Enter - PO/          ← (reserved) Single-PO invoices for manual entry
 ├── Manual Enter - Multi-Job/   ← Invoices spanning multiple job codes
 ├── Manual Review/              ← Unknown supplier or missing job code
@@ -113,9 +115,14 @@ stored in the shared Dropbox folder.
    - **Missing required data, unknown supplier, or failed API match** →
      `Manual Review/`
    - **Clean single-job** → adds to FP import, moves to `Processed/`
-8. **Uploads** output files to Dropbox `Output/`
+8. **Uploads** output files to Dropbox `Output/<Mon YYYY>/`
 9. **Moves** each original Dropbox invoice to its routed folder only after
-   generated outputs upload successfully
+   generated outputs upload successfully. Successful invoices go to
+   `Processed/<Mon YYYY>/`; review and error destinations remain ungrouped.
+
+The month folder is based on the processing run date, not the invoice date. It
+is created automatically when the first run occurs in a new month. For example,
+a September 2026 run uses `Sep 2026`, and a November 2026 run uses `Nov 2026`.
 
 ---
 
@@ -228,7 +235,8 @@ FP_API_KEY=your-token-here
 DROPBOX_APP_KEY=your-dropbox-app-key
 DROPBOX_APP_SECRET=your-dropbox-app-secret
 DROPBOX_REFRESH_TOKEN=your-dropbox-refresh-token
-DROPBOX_MEDIA_ROOT=/Media Receipts
+DROPBOX_MEDIA_ROOT=/Automation Testing
+APP_TIMEZONE=America/Edmonton
 ```
 
 The `.env` file is excluded from Git and must not be placed in Dropbox or

@@ -34,7 +34,10 @@ services:
         value: REPLACE_IN_DIGITALOCEAN
       - key: DROPBOX_MEDIA_ROOT
         scope: RUN_TIME
-        value: /Media Receipts
+        value: /Automation Testing
+      - key: APP_TIMEZONE
+        scope: RUN_TIME
+        value: America/Edmonton
       - key: MEDIA_API_TOKEN
         scope: RUN_TIME
         type: SECRET
