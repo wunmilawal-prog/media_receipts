@@ -72,6 +72,11 @@ Dandelion INV-13174 - Dec-25 - breakdown Susila.pdf
 - **InvoiceNumber** — the vendor's invoice/reference number
 - **JobCode** — the ZGM job code (e.g. `DCC-3074`, `EE-3270`). Spaces or dashes both work.
 
+Spaces around a job-code hyphen are normalized automatically. All of these are
+treated as `FOR-3412`: `FOR-3412`, `FOR - 3412`, `FOR -3412`, and `FOR 3412`.
+`GET /api/invoices` validates filenames before preview and returns
+`naming_valid`, `naming_issues`, and normalized `job_codes` for the frontend.
+
 Files with incorrect naming are moved to `Naming Errors/` and logged.
 
 ---

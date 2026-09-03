@@ -155,11 +155,11 @@ SUPPLIER_MAP = {
 # ─── Job Code Pattern ─────────────────────────────────────────────────────────
 # ZGM job codes are: 2-6 uppercase letters + dash + exactly 4 digits
 # e.g. DCC-3074, DE-3237, EE-3270, AIRB-3002, COVH-3173
-# Also handles space-separated: "DCC 3074", "EE 3270"
+# Also handles flexible spacing: "DCC 3074", "EE - 3270", "FOR -3412"
 # Intentionally excludes: 5-digit numbers (BOX-12814, CA-94025),
 # 3-digit numbers (CAD-198), and known non-job prefixes (INV-, RT-, TQ-)
 JOB_CODE_PATTERN = re.compile(
-    r'\b([A-Z]{2,6}[-\s][0-9]{4})\b'
+    r'\b([A-Z]{2,6}(?:[ \t]*-[ \t]*|[ \t]+)[0-9]{4})\b'
 )
 
 # Prefixes that are invoice/reference numbers or media terms — NOT job codes
@@ -174,8 +174,10 @@ MONTH_ABBREVS = {'jan','feb','mar','apr','may','jun','jul','aug','sep','oct','no
                  'september','october','november','december'}
 
 def normalize_job_code(code):
-    """Normalize job code: replace spaces with dashes, uppercase."""
-    return code.strip().upper().replace(' ', '-')
+    """Normalize flexible separators and spaces to PREFIX-1234."""
+    return re.sub(
+        r'[ \t]*-[ \t]*|[ \t]+', '-', code.strip().upper()
+    )
 
 
 def _is_valid_job_code(code):

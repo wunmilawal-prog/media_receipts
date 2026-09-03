@@ -40,6 +40,7 @@ from process_media_receipts import (
     _dropbox_error,
     _dropbox_remote_path,
     dropbox_list_folder,
+    extract_job_codes,
     get_dropbox_access_token,
     validate_filename,
 )
@@ -74,6 +75,9 @@ class Invoice(BaseModel):
     name: str
     size: Optional[int] = None
     modified_at: Optional[str] = None
+    naming_valid: bool = True
+    naming_issues: List[str] = Field(default_factory=list)
+    job_codes: List[str] = Field(default_factory=list)
 
 
 class InvoiceUploadResult(BaseModel):
@@ -368,14 +372,20 @@ def invoices() -> List[Invoice]:
         entries = _dropbox_incoming_files()
     except DropboxIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return [
-        Invoice(
-            name=entry["name"],
+    results = []
+    for entry in sorted(entries, key=lambda item: item["name"].casefold()):
+        name = entry["name"]
+        naming_valid, naming_issues = validate_filename(name)
+        job_codes, _ = extract_job_codes(name, "")
+        results.append(Invoice(
+            name=name,
             size=entry.get("size"),
             modified_at=entry.get("client_modified") or entry.get("server_modified"),
-        )
-        for entry in sorted(entries, key=lambda item: item["name"].casefold())
-    ]
+            naming_valid=naming_valid,
+            naming_issues=naming_issues,
+            job_codes=job_codes,
+        ))
+    return results
 
 
 @app.post(
