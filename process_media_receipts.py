@@ -23,6 +23,7 @@ import re
 import shutil
 import tempfile
 import argparse
+from functools import lru_cache
 import pdfplumber
 import requests
 from datetime import datetime
@@ -311,6 +312,46 @@ def load_supplier_codes():
     return codes
 
 
+@lru_cache(maxsize=1)
+def _supplier_display_names():
+    """Return the original FP supplier capitalization keyed case-insensitively."""
+    names = {}
+    if os.path.exists(SUPPLIER_CODES_FILE):
+        with open(SUPPLIER_CODES_FILE, newline='', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                name = row.get('Supplier_Name', '').strip()
+                if name:
+                    names[name.casefold()] = name
+    return names
+
+
+def _match_fp_supplier_hint(supplier_hint, fp_codes):
+    """Resolve an extracted hint only when it identifies one FP supplier."""
+    hint = str(supplier_hint or '').strip().casefold()
+    if not hint:
+        return None
+
+    exact_code = fp_codes.get(hint)
+    if exact_code:
+        return exact_code, _supplier_display_names().get(hint, supplier_hint)
+
+    # Station codes and shortened company names commonly omit an FP suffix,
+    # e.g. CFXE -> CFXE-FM and Astral -> Astral Media Outdoor L.P. A boundary
+    # is required so a short hint cannot match the middle of an unrelated name.
+    candidates = [
+        (name, code)
+        for name, code in fp_codes.items()
+        if name.startswith(hint)
+        and len(name) > len(hint)
+        and not name[len(hint)].isalnum()
+    ]
+    if len(candidates) != 1:
+        return None
+
+    name, code = candidates[0]
+    return code, _supplier_display_names().get(name, name)
+
+
 def detect_supplier(filename, text, fp_codes):
     """
     Detect supplier from filename and PDF text.
@@ -329,16 +370,13 @@ def detect_supplier(filename, text, fp_codes):
         if keyword in text_lower:
             return fp_code, display_name, tax_group, "LOW"
 
-    # Fallback: extract supplier name from filename (everything before first " - ")
-    # This takes priority over fuzzy FP text matching to avoid wrong matches
-    name_no_ext = os.path.splitext(filename)[0]
-    if ' - ' in name_no_ext:
-        extracted = name_no_ext.split(' - ')[0].strip()
-        if extracted:
-            exact_code = fp_codes.get(extracted.lower())
-            if exact_code:
-                return exact_code, extracted, TAX_GROUP_NONE, "HIGH"
-            return extracted, extracted, TAX_GROUP_NONE, "LOW"
+    # Resolve the supplier portion parsed before the invoice number. Never use
+    # the whole pre-job string, which can include invoice IDs and dates.
+    supplier_hint, _, _ = parse_filename_components(filename)
+    matched_supplier = _match_fp_supplier_hint(supplier_hint, fp_codes)
+    if matched_supplier:
+        code, display_name = matched_supplier
+        return code, display_name, TAX_GROUP_NONE, "HIGH"
 
     # Last resort: try matching against full FP supplier list
     for name_lower, code in fp_codes.items():
