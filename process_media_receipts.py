@@ -364,6 +364,32 @@ def _match_fp_supplier_hint(supplier_hint, fp_codes):
     return code, _supplier_display_names().get(name, name)
 
 
+def _supplier_gst_expectation(fp_code, supplier_display):
+    """Return True/False for configured suppliers, or None when unspecified."""
+    normalized_code = _normalized_match_value(fp_code)
+    normalized_name = _normalized_match_value(supplier_display)
+    if str(fp_code).casefold() in GST_SUPPLIER_CODES:
+        return True
+
+    expectations = {
+        tax_group == TAX_GROUP_GST
+        for mapped_code, mapped_name, tax_group in SUPPLIER_MAP.values()
+        if (
+            _normalized_match_value(mapped_code) == normalized_code
+            or _normalized_match_value(mapped_name) == normalized_name
+        )
+    }
+    return expectations.pop() if len(expectations) == 1 else None
+
+
+def resolve_invoice_tax_group(text, fp_code, supplier_display):
+    """Use invoice GST wording as truth and report configured contradictions."""
+    invoice_has_gst = bool(re.search(r'\bGST(?:\s*/\s*(?:HST|TPS))?\b', text or '', re.IGNORECASE))
+    expected_gst = _supplier_gst_expectation(fp_code, supplier_display)
+    conflict = expected_gst is not None and expected_gst != invoice_has_gst
+    return (TAX_GROUP_GST if invoice_has_gst else TAX_GROUP_NONE), conflict
+
+
 def detect_supplier(filename, text, fp_codes):
     """
     Detect supplier from filename and PDF text.
@@ -1586,6 +1612,9 @@ def process_receipts():
         # ── Step 7: Extract amounts ───────────────────────────────────────
         supplier_key = supplier_display.lower()
         subtotal, tax_amount, currency, amt_confidence = extract_amount(text, supplier_key)
+        tax_group, gst_conflict = resolve_invoice_tax_group(
+            text, fp_code, supplier_display
+        )
 
         # ── Step 8: Determine confidence & routing ─────────────────────────
         confidences = [sup_confidence, date_confidence, amt_confidence]
@@ -1604,6 +1633,8 @@ def process_receipts():
             flags.append("OLD_INVOICE_DATE")
         if subtotal == "N/A":
             flags.append("NO_AMOUNT")
+        if gst_conflict:
+            flags.append("GST_CONFLICT")
         if not job_codes:
             flags.append("NO_JOB_CODE")
         if len(job_codes) > 1:
@@ -1655,7 +1686,8 @@ def process_receipts():
             status = "Multi-Job (Manual)"
         elif flags and any(flag in flags for flag in (
                 'UNKNOWN_SUPPLIER', 'NO_INVOICE_NUMBER', 'NO_DATE',
-                'NO_AMOUNT', 'NO_JOB_CODE', 'FP_LOOKUP_FAILED')):
+                'NO_AMOUNT', 'NO_JOB_CODE', 'FP_LOOKUP_FAILED',
+                'GST_CONFLICT')):
             # Needs manual review
             dest = move_file(filepath, MANUAL_REVIEW_FOLDER)
             print(f"    → Needs review: moved to Manual Review/")

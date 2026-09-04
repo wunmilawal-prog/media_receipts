@@ -152,7 +152,7 @@ The generated CSV matches the FunctionPointe External Expense template:
 | Rate | Subtotal amount from PDF |
 | Billed | Blank |
 | Markup% | `0` |
-| Tax Group | `GST` for Canadian vendors, blank for US digital |
+| Tax Group | `GST` when GST wording appears on the invoice; otherwise blank |
 | Service Group | Parent estimate-phase name of the matched external expense |
 | Confidence | Calculated percentage — for your review |
 | Flag | Any issues flagged during extraction |
@@ -169,6 +169,11 @@ references such as `INV_1234ff05t` remain unchanged.
 Invoices dated in the current month or immediately preceding calendar month are
 accepted normally. Older invoices remain in the result but receive the
 `OLD_INVOICE_DATE` flag for Accounts to review.
+
+The invoice itself determines Tax Group: visible `GST`, `GST/HST`, or `GST/TPS`
+wording produces `GST`; otherwise the field is blank. If that result contradicts
+the supplier's configured tax expectation, the invoice receives `GST_CONFLICT`
+and is routed to Manual Review.
 
 > **Note:** The `Confidence` and `Flag` columns are for your review — remove them before importing to FunctionPointe.
 
