@@ -384,7 +384,11 @@ def _supplier_gst_expectation(fp_code, supplier_display):
 
 def resolve_invoice_tax_group(text, fp_code, supplier_display):
     """Use invoice GST wording as truth and report configured contradictions."""
-    invoice_has_gst = bool(re.search(r'\bGST(?:\s*/\s*(?:HST|TPS))?\b', text or '', re.IGNORECASE))
+    invoice_has_gst = bool(re.search(
+        r'\bGST(?=\b|\d)(?:\s*/\s*(?:HST|TPS))?',
+        text or '',
+        re.IGNORECASE,
+    ))
     expected_gst = _supplier_gst_expectation(fp_code, supplier_display)
     conflict = expected_gst is not None and expected_gst != invoice_has_gst
     return (TAX_GROUP_GST if invoice_has_gst else TAX_GROUP_NONE), conflict
@@ -786,6 +790,7 @@ def extract_amount(text, supplier_key=""):
     # GST/Tax extraction
     for gst_pat in [
         r'Tax\s+GST[^\n]*?\$?([\d,]+\.\d{2})',  # Pattison: "Tax GST ... $25.20"
+        r'\bGST[A-Z0-9]*\s+\d+(?:\.\d+)?%\s+\$?([\d,]+\.\d{2})',  # CJAY: GST861... 5.0% $72.00
         r'VAT/Tax\s*\([^)]*\)\s*(?:CA\$|CDN\$|\$)?([\d,]+\.?\d*)',  # Reddit: "VAT/Tax (5.00%) CA$42.57"
         r'GST\s+\(.*?\)\s+GST\s+\$?([\d,]+\.?\d*)',
         r'GST\s+\$?([\d,]+\.?\d*)',
