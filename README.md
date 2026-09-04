@@ -161,6 +161,11 @@ Literal filename labels such as a trailing `_Invoice` are removed from the
 Reference Number. Numeric suffixes that may be part of the vendor's reference,
 such as `1144645-4`, are preserved.
 
+Location/reference/date values are separated when they follow the complete
+pattern `Location_Reference_Mon_DD_YYYY`; for example,
+`Edmonton_105R023453_Jan_25_2026` becomes `105R023453`. Ordinary underscore
+references such as `INV_1234ff05t` remain unchanged.
+
 Invoices dated in the current month or immediately preceding calendar month are
 accepted normally. Older invoices remain in the result but receive the
 `OLD_INVOICE_DATE` flag for Accounts to review.

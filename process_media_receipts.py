@@ -447,6 +447,22 @@ def extract_invoice_number(filename, text):
 def normalize_reference_number(value):
     """Remove literal Invoice labels while preserving the vendor's ID."""
     reference = str(value or '').strip()
+
+    # Some CTV-style filenames combine a location, reference and date in one
+    # underscore-delimited value, e.g.
+    # Edmonton_105R023453_Jan_25_2026 -> 105R023453. Require the complete date
+    # shape so ordinary underscore references such as INV_1234ff05t are kept.
+    location_reference = re.match(
+        r'^[A-Za-z][A-Za-z ]*_'
+        r'([A-Z0-9]*\d[A-Z0-9]*)_'
+        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)_'
+        r'\d{1,2}_\d{4}(?:[_-].*)?$',
+        reference,
+        flags=re.IGNORECASE,
+    )
+    if location_reference:
+        reference = location_reference.group(1)
+
     # Handles suffixes such as AST_228636_Invoice and 40_11483380_Invoice.
     reference = re.sub(
         r'(?:[\s_-]+invoice(?:\s*(?:no\.?|number|#))?)$',
