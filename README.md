@@ -143,19 +143,27 @@ The generated CSV matches the FunctionPointe External Expense template:
 | *Supplier | Detected Function Point supplier name |
 | Expense Date | Date from PDF |
 | Payable Account | Blank (fill in FP or set default in script) |
-| Office | `CGY` (configurable in script) |
+| Office | Blank |
 | Description | Auto-generated summary |
 | Terms | `Net 30` (configurable) |
 | *Job | Job code from filename |
 | *Expense Type | Matching external-expense name from the Function Point job |
 | Quantity | `1` |
 | Rate | Subtotal amount from PDF |
-| Billed | `Yes` |
+| Billed | Blank |
 | Markup% | `0` |
 | Tax Group | `GST` for Canadian vendors, blank for US digital |
 | Service Group | Parent estimate-phase name of the matched external expense |
 | Confidence | Calculated percentage — for your review |
 | Flag | Any issues flagged during extraction |
+
+Literal filename labels such as a trailing `_Invoice` are removed from the
+Reference Number. Numeric suffixes that may be part of the vendor's reference,
+such as `1144645-4`, are preserved.
+
+Invoices dated in the current month or immediately preceding calendar month are
+accepted normally. Older invoices remain in the result but receive the
+`OLD_INVOICE_DATE` flag for Accounts to review.
 
 > **Note:** The `Confidence` and `Flag` columns are for your review — remove them before importing to FunctionPointe.
 
@@ -220,9 +228,9 @@ these defaults:
 
 ```python
 FP_DEFAULTS = {
-    "Office":       "CGY",      # Calgary office
+    "Office":       "",         # left blank for Accounts
     "Terms":        "Net 30",
-    "Billed":       "Yes",
+    "Billed":       "",
     "Markup_Pct":   "0",
 }
 ```

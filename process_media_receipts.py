@@ -77,11 +77,11 @@ set_processing_root(SCRIPT_DIR)
 # These defaults can be adjusted to match your FP configuration.
 FP_DEFAULTS = {
     "Payable_Account": "",        # e.g. "2000" — leave blank to fill in FP
-    "Office":          "CGY",     # Calgary office code
+    "Office":          "",        # Leave blank for Accounts
     "Terms":           "Net 30",
     "Quantity":        "1",
     "Markup_Pct":      "0",
-    "Billed":          "Yes",     # Bill to client
+    "Billed":          "",        # Leave blank for Accounts
     "Override":        "",
     "Manually_Exported": "",
     "Start_New_Expense": "",
@@ -92,6 +92,14 @@ FP_DEFAULTS = {
 # Tax groups — Canadian vendors charge GST; US-origin digital services typically 0
 TAX_GROUP_GST  = "GST"
 TAX_GROUP_NONE = ""
+
+# Confirmed Canadian suppliers whose names are resolved through the FP supplier
+# file rather than SUPPLIER_MAP. Accounts applied GST to these suppliers in the
+# reviewed Sep 2026 import. Keep this controlled so foreign vendors remain blank.
+GST_SUPPLIER_CODES = {
+    "asmeout", "cfhi", "cfxefm", "cfxwfm", "chlb", "chqrcrs",
+    "chslfmsl", "chupfm", "cibkfm", "cjayfm", "cjprfm", "vemeinc",
+}
 
 
 class FunctionPointLookupError(RuntimeError):
@@ -375,7 +383,12 @@ def detect_supplier(filename, text, fp_codes):
     matched_supplier = _match_fp_supplier_hint(supplier_hint, fp_codes)
     if matched_supplier:
         code, display_name = matched_supplier
-        return code, display_name, TAX_GROUP_NONE, "HIGH"
+        tax_group = (
+            TAX_GROUP_GST
+            if str(code).casefold() in GST_SUPPLIER_CODES
+            else TAX_GROUP_NONE
+        )
+        return code, display_name, tax_group, "HIGH"
 
     # Parent-company names in invoice bodies are weaker than an unambiguous
     # filename supplier. Use PDF text only after filename resolution fails.
@@ -403,7 +416,7 @@ def extract_invoice_number(filename, text):
     _, invoice_num, _ = parse_filename_components(filename)
 
     if invoice_num != "N/A":
-        return invoice_num
+        return normalize_reference_number(invoice_num)
 
     # Fallback for "Multiple" filenames (e.g. Dandelion): scan the filename directly
     # for common invoice number tokens like INV-13434 or 12345-6
@@ -414,7 +427,7 @@ def extract_invoice_number(filename, text):
             cand = m.group(1)
             # Make sure it's not a date year or short noise
             if not re.match(r'^(19|20)\d{2}$', cand):
-                return cand
+                return normalize_reference_number(cand)
 
     # Fallback: scan PDF text for common invoice number patterns
     if text:
@@ -425,9 +438,43 @@ def extract_invoice_number(filename, text):
         ]:
             m = re.search(pat, text, re.IGNORECASE)
             if m:
-                return m.group(1).strip()
+                return normalize_reference_number(m.group(1))
 
     return "N/A"
+
+
+def normalize_reference_number(value):
+    """Remove literal Invoice labels while preserving the vendor's ID."""
+    reference = str(value or '').strip()
+    # Handles suffixes such as AST_228636_Invoice and 40_11483380_Invoice.
+    reference = re.sub(
+        r'(?:[\s_-]+invoice(?:\s*(?:no\.?|number|#))?)$',
+        '',
+        reference,
+        flags=re.IGNORECASE,
+    )
+    # Handles a separate leading label such as "Invoice INV-18810" without
+    # stripping an ID prefix that is itself part of the reference.
+    reference = re.sub(
+        r'^invoice(?:\s*(?:no\.?|number|#))?[\s_:.-]+',
+        '',
+        reference,
+        flags=re.IGNORECASE,
+    )
+    return reference.strip(' _-') or "N/A"
+
+
+def is_older_than_previous_month(expense_date):
+    """Return true when a date predates the month immediately before this run."""
+    try:
+        invoice_date = datetime.strptime(expense_date, '%m-%d-%Y')
+    except (TypeError, ValueError):
+        return False
+    month_difference = (
+        (RUN_STARTED_AT.year - invoice_date.year) * 12
+        + RUN_STARTED_AT.month - invoice_date.month
+    )
+    return month_difference > 1
 
 
 def extract_service_group(filename):
@@ -1522,6 +1569,8 @@ def process_receipts():
             flags.append("NO_INVOICE_NUMBER")
         if expense_date == "N/A":
             flags.append("NO_DATE")
+        elif is_older_than_previous_month(expense_date):
+            flags.append("OLD_INVOICE_DATE")
         if subtotal == "N/A":
             flags.append("NO_AMOUNT")
         if not job_codes:
