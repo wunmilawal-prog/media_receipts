@@ -24,6 +24,7 @@ import shutil
 import tempfile
 import argparse
 from functools import lru_cache
+from decimal import Decimal, InvalidOperation
 import pdfplumber
 import requests
 from datetime import datetime
@@ -641,6 +642,7 @@ def extract_amount(text, supplier_key=""):
 
     subtotal = "N/A"
     tax_amount = "N/A"
+    subtotal_includes_tax = False
 
     # ── Meta / Facebook specific ──────────────────────────────────────────
     if 'meta' in supplier_key or 'facebook' in supplier_key:
@@ -736,10 +738,12 @@ def extract_amount(text, supplier_key=""):
             m = re.search(rf'{label}[\s/A-ZÀ-Ÿ]*:?\s*(?:CAD|CA\$|CDN\$|\$)?\s*([\d,]+\.?\d*)', text, re.IGNORECASE)
             if m:
                 subtotal = m.group(1).replace(',', '')
+                subtotal_includes_tax = True
                 break
 
     # GST/Tax extraction
     for gst_pat in [
+        r'Tax\s+GST[^\n]*?\$?([\d,]+\.\d{2})',  # Pattison: "Tax GST ... $25.20"
         r'VAT/Tax\s*\([^)]*\)\s*(?:CA\$|CDN\$|\$)?([\d,]+\.?\d*)',  # Reddit: "VAT/Tax (5.00%) CA$42.57"
         r'GST\s+\(.*?\)\s+GST\s+\$?([\d,]+\.?\d*)',
         r'GST\s+\$?([\d,]+\.?\d*)',
@@ -750,6 +754,17 @@ def extract_amount(text, supplier_key=""):
         if m_tax:
             tax_amount = m_tax.group(1).replace(',', '')
             break
+
+    # Amount Due / Balance Due normally includes tax. If the invoice also
+    # exposes a tax amount, convert the fallback total to the pre-tax Rate
+    # expected by the FP import.
+    if subtotal_includes_tax and tax_amount != "N/A":
+        try:
+            subtotal = str(
+                (Decimal(subtotal) - Decimal(tax_amount)).quantize(Decimal('0.01'))
+            )
+        except InvalidOperation:
+            pass
 
     confidence = "HIGH" if subtotal != "N/A" else "LOW"
     return subtotal, tax_amount, currency, confidence
