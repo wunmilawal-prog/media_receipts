@@ -45,9 +45,9 @@ No job code        -> Manual Review
 No readable text   -> Manual Review/OCR candidate
 ```
 
-The change also flags cases where the filename initials disagree with the job
-prefix found in the PDF. Those conflicts skip Function Point lookup and route to
-Manual Review.
+Filename initials are treated only as a human hint. When the PDF contains one
+complete job code, that code is used and validated through Function Point even
+if the trailing filename initials are different.
 
 ## 2. Regex detects non-job text as job codes
 
@@ -90,7 +90,7 @@ The processor already performs Function Point lookup only when exactly one job
 code remains. Genuine multi-job invoices therefore do not trigger one API call
 per detected job; they route directly to `Manual Enter - Multi-Job`.
 
-## 4. Filename and PDF conflicts
+## 4. Filename initials differ from the PDF job
 
 ### Issue
 
@@ -102,10 +102,13 @@ Astral AST_230970 Sept 27 2026 NT.pdf -> PDF contains JAY-3646
 CJAY 2085307-3 Sept 27 2026 NT.pdf    -> PDF contains JAY-3646
 ```
 
-### Proposed handling
+### Decision
 
-Do not guess. Route filename/PDF prefix conflicts to `Manual Review` and display
-both values in the preview.
+Do not treat this as a conflict. The initials are not reliable enough to reject
+an otherwise complete code. Use the single complete job code extracted from the
+PDF and allow the normal Function Point lookup to validate it. If Function Point
+cannot resolve the job or expense match, route it to Manual Review through the
+existing lookup-failure behavior.
 
 ## 5. Image-only PDFs
 

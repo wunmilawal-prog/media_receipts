@@ -109,7 +109,8 @@ When the complete job code is absent from the filename, the PDF fallback:
 - removes obvious non-job matches such as `P.O. BOX 7400` and
   `CMA / RMR 2026`;
 - preserves multiple genuine campaign/job lines as a multi-job invoice;
-- routes a filename/PDF client-prefix disagreement to `Manual Review/`;
+- uses a complete job code found in the PDF even when the filename ends with
+  different or incomplete initials;
 - routes an unreadable PDF or a PDF with no usable job code to review rather
   than guessing.
 
@@ -420,10 +421,6 @@ lock and run-status store are local to the instance.
 **File appears in Naming Errors/** — Confirm that it is a PDF with a safe,
 usable filename. A complete job code is preferred, but trailing client initials
 such as `JAY` are accepted when the PDF contains the complete code.
-
-**Filename/PDF job conflict** — If the filename ends in one client prefix but
-the PDF contains a different single-job prefix, the invoice is routed to Manual
-Review with `JOB_PREFIX_CONFLICT`.
 
 **Supplier shows as UNKNOWN** — Add the vendor keyword to `SUPPLIER_MAP` in the script.
 

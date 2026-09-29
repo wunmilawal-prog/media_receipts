@@ -878,22 +878,6 @@ def extract_job_codes(filename, text):
     return sorted(pdf_codes), "pdf"
 
 
-def extract_filename_client_hint(filename):
-    """Return trailing client initials when no complete filename job exists."""
-    name_no_ext = os.path.splitext(os.path.basename(filename))[0].strip()
-    match = re.search(r'(?:^|[\s_-])([A-Z]{2,6})$', name_no_ext, re.IGNORECASE)
-    if not match:
-        return ""
-
-    hint = match.group(1).upper()
-    excluded = NON_JOB_PREFIXES | {
-        'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-        'JUL', 'AUG', 'SEP', 'SEPT', 'OCT', 'NOV', 'DEC',
-        'INVOICE', 'MULTIPLE',
-    }
-    return "" if hint in excluded else hint
-
-
 # ─── Function Point Job / Expense Lookup ─────────────────────────────────────
 
 def _normalized_match_value(value):
@@ -1658,15 +1642,6 @@ def process_receipts():
 
         # ── Step 6: Extract job codes ─────────────────────────────────────
         job_codes, job_source = extract_job_codes(filename, text)
-        filename_client_hint = (
-            extract_filename_client_hint(filename) if job_source == "pdf" else ""
-        )
-        pdf_job_prefixes = {code.split('-', 1)[0] for code in job_codes}
-        job_prefix_conflict = bool(
-            filename_client_hint
-            and len(job_codes) == 1
-            and filename_client_hint not in pdf_job_prefixes
-        )
 
         # ── Step 7: Extract amounts ───────────────────────────────────────
         supplier_key = supplier_display.lower()
@@ -1698,14 +1673,11 @@ def process_receipts():
             flags.append("NO_JOB_CODE")
         if len(job_codes) > 1:
             flags.append("MULTI_JOB")
-        if job_prefix_conflict:
-            flags.append("JOB_PREFIX_CONFLICT")
 
         # Single-job invoices require a confirmed Function Point expense match.
         fp_expense_match = None
         fp_lookup_error = ""
-        if (len(job_codes) == 1 and fp_code != "UNKNOWN"
-                and not job_prefix_conflict):
+        if len(job_codes) == 1 and fp_code != "UNKNOWN":
             job_number = re.sub(r'\D', '', job_codes[0])
             try:
                 fp_job = get_function_point_job(
@@ -1724,8 +1696,6 @@ def process_receipts():
         print(f"    Invoice # : {invoice_num}")
         print(f"    Date      : {expense_date} ({date_confidence})")
         print(f"    Jobs      : {', '.join(job_codes) if job_codes else 'NONE'}")
-        if job_prefix_conflict:
-            print(f"    Job Hint  : filename {filename_client_hint} conflicts with PDF")
         print(f"    Amount    : {currency} {subtotal} | Tax: {tax_amount} ({amt_confidence})")
         if fp_expense_match:
             print(f"    FP Expense: {fp_expense_match['expense_type']} "
@@ -1751,7 +1721,7 @@ def process_receipts():
         elif flags and any(flag in flags for flag in (
                 'UNKNOWN_SUPPLIER', 'NO_INVOICE_NUMBER', 'NO_DATE',
                 'NO_AMOUNT', 'NO_JOB_CODE', 'FP_LOOKUP_FAILED',
-                'GST_CONFLICT', 'JOB_PREFIX_CONFLICT')):
+                'GST_CONFLICT')):
             # Needs manual review
             dest = move_file(filepath, MANUAL_REVIEW_FOLDER)
             print(f"    → Needs review: moved to Manual Review/")
