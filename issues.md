@@ -210,3 +210,25 @@ which did not explain the underlying result.
   text inside the PDF.
 - Multi-job preview messages now list the detected jobs and explain that a
   manual split is required.
+
+## 9. PDF fallback replaced useful filename data
+
+### Issue
+
+After allowing filenames without full job numbers, supplier, reference, and
+date extraction relied too heavily on PDF text. This introduced errors even
+though those fields were still present in the filename.
+
+### Decision
+
+Use a field-by-field filename-first hierarchy:
+
+```text
+Supplier  -> filename mapping/FP supplier list -> PDF fallback
+Reference -> first reference token in filename -> PDF fallback
+Date      -> filename date -> labelled PDF date fallback
+Job       -> complete filename code -> filtered PDF job-code fallback
+Amount/GST -> PDF
+```
+
+The PDF supplements missing data; it does not replace reliable filename values.

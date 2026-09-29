@@ -123,6 +123,7 @@ SUPPLIER_MAP = {
     "youtube":                        ("YT",            "YouTube",                          TAX_GROUP_NONE),
     "tiktok":                         ("Tik",           "TikTok",                           TAX_GROUP_NONE),
     "twitter":                        ("Twi",           "Twitter / X",                      TAX_GROUP_NONE),
+    "reddit":                         ("redd",          "Reddit",                           TAX_GROUP_NONE),
     "spotify":                        ("Spo",           "Spotify",                          TAX_GROUP_NONE),
     "vistar":                         ("ViMed",         "Vistar Media",                     TAX_GROUP_GST),
     "nexthome":                       ("NexHom",        "NextHome",                         TAX_GROUP_GST),
@@ -272,11 +273,14 @@ def parse_filename_components(filename):
                 first_job_match = m
             last_job_match = m
 
-    if first_job_match is None:
-        return name.strip(), "N/A", ""
-
-    pre_job     = name[:first_job_match.start()].strip().strip('-').strip()
-    post_job    = name[last_job_match.end():].strip().strip('-').strip()
+    pre_job = (
+        name[:first_job_match.start()].strip().strip('-').strip()
+        if first_job_match else name.strip()
+    )
+    post_job = (
+        name[last_job_match.end():].strip().strip('-').strip()
+        if last_job_match else ""
+    )
     service_group = post_job  # everything after the last job code
 
     # ── Parse supplier + invoice from pre_job ─────────────────────────────────
@@ -477,14 +481,45 @@ def extract_invoice_number(filename, text):
 
     Invoice numbers may contain dashes with NO spaces (e.g. 1015821-2, E-580582).
     """
+    name_no_ext = os.path.splitext(filename)[0]
+    has_filename_job = any(
+        _is_valid_job_code(normalize_job_code(match.group(1)))
+        for match in JOB_CODE_PATTERN.finditer(name_no_ext)
+    )
+
+    # With no complete filename job, do not let trailing dash-separated dates
+    # masquerade as references (for example Reddit "...4985543 - Sep 19 - DE").
+    if not has_filename_job:
+        for token in name_no_ext.split():
+            candidate = token.strip(' ,;()[]')
+            if not re.search(r'\d', candidate):
+                continue
+            if re.fullmatch(r'(?:19|20)\d{2}', candidate):
+                continue
+            normalized = normalize_reference_number(candidate)
+            if normalized != "N/A":
+                return normalized
+
     _, invoice_num, _ = parse_filename_components(filename)
 
     if invoice_num != "N/A":
         return normalize_reference_number(invoice_num)
 
+    # A complete job code is no longer required for filename parsing. In the
+    # media team's current convention, the first digit-containing filename
+    # token is the invoice/reference and appears before the date/client hint.
+    for token in name_no_ext.split():
+        candidate = token.strip(' ,;()[]')
+        if not re.search(r'\d', candidate):
+            continue
+        if re.fullmatch(r'(?:19|20)\d{2}', candidate):
+            continue
+        normalized = normalize_reference_number(candidate)
+        if normalized != "N/A":
+            return normalized
+
     # Fallback for "Multiple" filenames (e.g. Dandelion): scan the filename directly
     # for common invoice number tokens like INV-13434 or 12345-6
-    name_no_ext = os.path.splitext(filename)[0]
     if 'multiple' in name_no_ext.lower():
         m = re.search(r'\b((?:INV|CINV|REF|PO)-?\d[\w\-]*\d|\d[\d\-]{2,}\d)\b', name_no_ext, re.IGNORECASE)
         if m:
@@ -515,6 +550,15 @@ def extract_invoice_number(filename, text):
 def normalize_reference_number(value):
     """Remove literal Invoice labels while preserving the vendor's ID."""
     reference = str(value or '').strip()
+
+    # Supplier/platform labels attached to the reference in filename tokens.
+    reference = re.sub(r'^AST[/_-](?=\d)', '', reference, flags=re.IGNORECASE)
+    reference = re.sub(
+        r'^.*?receipt[/_:-](?=[A-Z0-9]*\d)',
+        '',
+        reference,
+        flags=re.IGNORECASE,
+    )
 
     # Some CTV-style filenames combine a location, reference and date in one
     # underscore-delimited value, e.g.
@@ -576,6 +620,25 @@ def extract_service_group(filename):
 
 def extract_date(filename, text):
     """Extract invoice/expense date from PDF text."""
+    # The media team includes the intended expense date in the filename. Use it
+    # first and inspect PDF text only when the filename has no recognizable date.
+    filename_text = os.path.splitext(filename)[0].replace('_', ' ')
+    filename_date = re.search(
+        r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?'
+        r'\s+(\d{1,2}),?\s+(\d{4})\b',
+        filename_text,
+        re.IGNORECASE,
+    )
+    if filename_date:
+        month, day, year = filename_date.groups()
+        if month.casefold() == 'sept':
+            month = 'Sep'
+        try:
+            dt = datetime.strptime(f"{month} {day} {year}", '%b %d %Y')
+            return dt.strftime('%m-%d-%Y'), "HIGH"
+        except ValueError:
+            pass
+
     if not text:
         return "N/A", "LOW"
 
@@ -698,7 +761,6 @@ def extract_date(filename, text):
     # Some station invoices have an incomplete/unreadable PDF text layer but
     # include a clear date in their filename. Treat this as a fallback rather
     # than overriding a date found on the invoice itself.
-    filename_text = os.path.splitext(filename)[0].replace('_', ' ')
     for pat, fmts in patterns:
         m = re.search(pat, filename_text, re.IGNORECASE)
         if not m:
