@@ -137,6 +137,7 @@ SUPPLIER_MAP = {
     # ── Out of Home ───────────────────────────────────────────────────────────────────────────────
     "pattison outdoor":               ("PaOuAdL",       "Pattison Outdoor Advertising LP",  TAX_GROUP_GST),
     "pattison":                       ("PaOuAdL",       "Pattison Outdoor Advertising LP",  TAX_GROUP_GST),
+    "astral":                         ("AsMeOut",       "Astral Media Outdoor L.P.",         TAX_GROUP_GST),
     "farwest outdoor":                ("FarWest",        "FarWest Outdoor",                  TAX_GROUP_GST),
     "farwest":                        ("FarWest",        "FarWest Outdoor",                  TAX_GROUP_GST),
     "oilers entertainment":           ("OiEnGro",       "Oilers Entertainment Group",       TAX_GROUP_GST),
@@ -152,6 +153,10 @@ SUPPLIER_MAP = {
     "cfac":                           ("CFAC",          "CFAC",                             TAX_GROUP_GST),
     "cfxl-fm":                        ("CFXLFM",        "CFXL-FM",                          TAX_GROUP_GST),
     "cfxl":                           ("CFXLFM",        "CFXL-FM",                          TAX_GROUP_GST),
+    "chup-fm":                        ("CHUPFM",        "CHUP-FM",                          TAX_GROUP_GST),
+    "chup":                           ("CHUPFM",        "CHUP-FM",                          TAX_GROUP_GST),
+    "cjay-fm":                        ("CJAYFM",        "CJAY-FM",                          TAX_GROUP_GST),
+    "cjay":                           ("CJAYFM",        "CJAY-FM",                          TAX_GROUP_GST),
     "cirk-fm":                        ("CIRKFM",        "CIRK-FM",                          TAX_GROUP_GST),
     "cirk":                           ("CIRKFM",        "CIRK-FM",                          TAX_GROUP_GST),
     "ckmp-fm":                        ("CKMPFM",        "CKMP-FM",                          TAX_GROUP_GST),
@@ -162,6 +167,7 @@ SUPPLIER_MAP = {
     "corus":                          ("CSI",           "Corus Sales Inc",                  TAX_GROUP_GST),
     "rogers digital":                 ("RoDiMed",       "Rogers Digital Media",             TAX_GROUP_GST),
     # ── Print / Publishing ────────────────────────────────────────────────────────────────────────
+    "postmedia":                      ("Pos",           "Postmedia",                         TAX_GROUP_GST),
     "paper leaf":                     ("PaLea",         "Paper Leaf",                       TAX_GROUP_GST),
 }
 
@@ -490,6 +496,8 @@ def extract_invoice_number(filename, text):
     # Fallback: scan PDF text for common invoice number patterns
     if text:
         for pat in [
+            # Broadcast table: labels on one line and values on the next.
+            r'Invoice\s*#\s+Invoice\s+Date[^\n]*\n[^\n]*?\s(\d{6,}-\d+)\s+\d{1,2}/\d{1,2}/\d{2,4}\b',
             # Compact bilingual layout: "Invoice / FactureAST/230970".
             # The optional letter block is a vendor prefix, not the reference.
             r'Invoice\s*/\s*Facture\s*(?:[A-Z]{2,6}[/_-])?(\d{5,})',
@@ -1414,6 +1422,17 @@ def _print_dry_run_preview(staging_root, remote_files):
                             review.get("fp_lookup_error")
                             or review.get("flags")
                             or "This invoice requires manual review."
+                        )
+        elif output_name.startswith("MultiJob_Summary_"):
+            with open(output_path, newline="", encoding="utf-8") as input_file:
+                for review in csv.DictReader(input_file):
+                    filename = str(review.get("file", "")).casefold()
+                    jobs = str(review.get("jobs", "")).strip()
+                    if filename:
+                        review_details[filename] = (
+                            f"Multiple jobs found: {jobs}. Manual split required."
+                            if jobs else
+                            "Multiple jobs found. Manual split required."
                         )
 
     if import_rows:

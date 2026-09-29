@@ -188,3 +188,25 @@ and explicitly labelled bilingual `Date:DD Sept/Sep YYYY` values. The filename
 date parser also recognizes both `Sep` and `Sept`, so `Sept 27 2026` remains a
 fallback when the PDF date is missing or unreadable. A labelled PDF date is
 still preferred over campaign or flight-date ranges elsewhere on the invoice.
+
+## 8. Generic no-import-row preview messages
+
+### Issue
+
+Some correctly routed files displayed `No import-ready row was generated`,
+which did not explain the underlying result.
+
+- CJAY rows used the literal header word `Invoice` as their reference, so the
+  preview could not associate the generated row with its source filename.
+- Genuine multi-job files had no import row by design, but the preview did not
+  include their detected job list.
+
+### Solution
+
+- Added the broadcast table pattern where `Invoice #` and `Invoice Date` labels
+  are on one line and their values are on the next.
+- Added explicit filename supplier mappings for Astral, CJAY-FM, CHUP-FM, and
+  Postmedia so their confidence and FP matching do not depend on parent-company
+  text inside the PDF.
+- Multi-job preview messages now list the detected jobs and explain that a
+  manual split is required.
