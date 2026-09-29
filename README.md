@@ -6,14 +6,31 @@ Automates extraction and FunctionPointe import preparation for ZGM media invoice
 
 ## Quick Start
 
-1. Drop PDF invoices into **`/Automation Testing/Incoming`** in Dropbox
-2. Run the script:
-   ```
-   python3 process_media_receipts.py
-   ```
-3. Upload the monthly **`/Automation Testing/Output/<Mon YYYY>/FP_Import_*.csv`** into FunctionPointe
-4. Handle anything in the Dropbox **`Manual Enter - Multi-Job/`** or
-   **`Manual Review/`** folders
+The Lovable web app is the normal interface for the Accounts team:
+
+1. Upload PDF invoices through Lovable, or place them directly in Dropbox
+   **`/Automation Testing/Incoming`**.
+2. Open the Lovable dashboard and refresh the invoice list.
+3. Select invoices and click **Preview**. Preview is non-destructive: it shows
+   the proposed spreadsheet fields and routing without moving any files.
+4. Review any warnings, then select the invoices to run and click **Process**.
+   The backend processes the selection as one batch and creates one combined FP
+   import CSV, not one CSV per invoice.
+5. Download the generated output through Lovable or use the official copy in
+   Dropbox **`/Automation Testing/Output/<Mon YYYY>/`**.
+6. Handle anything routed to Dropbox **`Manual Enter - Multi-Job/`** or
+   **`Manual Review/`**.
+
+Lovable does not contain Dropbox or Function Point credentials. It calls the
+Python API deployed on DigitalOcean, and that backend performs the extraction,
+Function Point lookup, Dropbox upload/download, report creation, and routing.
+
+For local development or administrative testing, the processor can also be run
+directly:
+
+```bash
+python3 process_media_receipts.py
+```
 
 Dropbox is the default. For troubleshooting with the original project-local
 folders, run:
@@ -54,23 +71,29 @@ combined summary workbook, while routing each source invoice individually.
 
 ## File Naming Convention
 
-Invoices **must** follow this naming pattern:
+Invoices must contain three useful pieces of information:
 
 ```
-[Supplier] [InvoiceNumber] - [JobCode].pdf
+[Supplier hint] [Invoice/reference number] - [Full job code].pdf
 ```
 
 **Examples:**
 ```
-Meta 3U55W7VD72 - DCC-3074.pdf
-Netflix CINV-5414568 - EE 3270.pdf
-Oilers Entertainment Group 19584-24878 - DE 3237.pdf
-Dandelion INV-13174 - Dec-25 - breakdown Susila.pdf
+CFRN - 105R024853 - JAY-3313.pdf
+Netflix CINV-5414568 - EE-3270.pdf
+CFXL 1208327-3 Sept 20 2026 JAY-3646.pdf
 ```
 
-- **Supplier** — matches a known vendor (Meta, Netflix, Dandelion, etc.)
-- **InvoiceNumber** — the vendor's invoice/reference number
-- **JobCode** — the ZGM job code (e.g. `DCC-3074`, `EE-3270`). Spaces or dashes both work.
+- **Supplier hint** — the vendor or FP expense-type name used to begin matching
+- **Invoice/reference number** — becomes `Reference Number` in the import file
+- **Job information** — preferably the full client prefix plus job number (for
+  example `JAY-3313`). If the filename contains only client initials such as
+  `JAY`, the processor checks the PDF for the complete code.
+
+The filename does not need to use one exact punctuation style. The processor
+normalizes spaces, underscores, and common separators without renaming the
+original Dropbox file. Descriptive words and dates may remain in the filename,
+but shorter names are easier for the team to review.
 
 Spaces around a job-code hyphen are normalized automatically. All of these are
 treated as `FOR-3412`: `FOR-3412`, `FOR - 3412`, `FOR -3412`, and `FOR 3412`.
@@ -80,6 +103,34 @@ job code, so `_JAY - 3313` is normalized to `JAY-3313`.
 `naming_valid`, `naming_issues`, and normalized `job_codes` for the frontend.
 
 Files with incorrect naming are moved to `Naming Errors/` and logged.
+
+When the complete job code is absent from the filename, the PDF fallback:
+
+- removes obvious non-job matches such as `P.O. BOX 7400` and
+  `CMA / RMR 2026`;
+- preserves multiple genuine campaign/job lines as a multi-job invoice;
+- routes a filename/PDF client-prefix disagreement to `Manual Review/`;
+- routes an unreadable PDF or a PDF with no usable job code to review rather
+  than guessing.
+
+### How the filename is used
+
+The filename is a starting point, not the sole source of invoice data:
+
+1. The full job code identifies the Function Point docket.
+2. The supplier portion is treated as a hint and normalized through
+   `SUPPLIER_MAP` and the Function Point supplier-code list.
+3. The processor gets the job's available expense types and service groups from
+   Function Point.
+4. It matches the normalized supplier hint to one expense type on that job.
+5. The PDF supplies or confirms the reference number, invoice date, amount, and
+   GST wording.
+
+Some invoice vendor names differ from their Function Point expense-type names.
+These exceptions belong in `SUPPLIER_MAP`. For example, `CTV Edmonton` maps to
+the `CFRN` expense type. Other CTV vendors are not automatically changed to
+`CFRN`. If no unique Function Point match can be made, the invoice is routed to
+`Manual Review/` rather than guessed.
 
 ---
 
@@ -111,7 +162,8 @@ stored in the shared Dropbox folder.
 ## How the Script Works
 
 1. **Lists** Dropbox `Incoming/` and downloads files to temporary local storage
-2. **Validates** filename against naming convention — bad names go to `Naming Errors/`
+2. **Validates** that the file is a PDF and reads its filename hints. A missing
+   complete filename job code triggers PDF fallback rather than rejection.
 3. **Extracts** text from each PDF using `pdfplumber`
 4. **Detects** supplier → maps to FP supplier code
 5. **Extracts** invoice number, date, amount, GST, and job code(s)
@@ -140,13 +192,13 @@ The generated CSV matches the FunctionPointe External Expense template:
 | Column | Source |
 |--------|--------|
 | Reference Number | Invoice number from filename/PDF |
-| *Supplier | Detected Function Point supplier name |
+| *Supplier | Normalized supplier name derived from the filename/PDF hint |
 | Expense Date | Date from PDF |
 | Payable Account | Blank (fill in FP or set default in script) |
 | Office | Blank |
 | Description | Auto-generated summary |
 | Terms | `Net 30` (configurable) |
-| *Job | Job code from filename |
+| *Job | Full job number from the filename (numeric portion in the FP import) |
 | *Expense Type | Matching external-expense name from the Function Point job |
 | Quantity | `1` |
 | Rate | Subtotal amount from PDF |
@@ -160,6 +212,11 @@ The generated CSV matches the FunctionPointe External Expense template:
 Literal filename labels such as a trailing `_Invoice` are removed from the
 Reference Number. Numeric suffixes that may be part of the vendor's reference,
 such as `1144645-4`, are preserved.
+
+The standalone word `invoice` is removed when it is only a label, but a genuine
+reference such as `INV_1234ff05t` is preserved. For example,
+`AST_2286368_invoice` becomes `2286368`, while `INV_1234ff05t` remains
+`INV_1234ff05t`.
 
 Location/reference/date values are separated when they follow the complete
 pattern `Location_Reference_Mon_DD_YYYY`; for example,
@@ -197,6 +254,7 @@ The script auto-detects and maps these vendors:
 | Rogers Digital Media | `RoDiMed` | GST applicable |
 | Bell Media | `BMRGPC` | GST applicable |
 | CTV | `CTVC` | GST applicable |
+| CTV Edmonton | `CFRN` | Vendor-name exception; matches the CFRN FP expense type |
 | Global Television | `GT` | GST applicable |
 | Corus | `CSI` | GST applicable |
 | Campsite Global | `CaGlInc` | GST applicable |
@@ -274,7 +332,18 @@ Python 3.9+
 ## Web API and Lovable
 
 The FastAPI service in `api.py` exposes the existing processor to the separate
-Lovable frontend:
+Lovable frontend. The production flow is:
+
+```text
+User → Lovable → DigitalOcean API → Dropbox + Function Point
+```
+
+Lovable lists and uploads invoices, displays preview results, starts processing,
+and provides output download buttons. DigitalOcean holds the secrets and runs
+all invoice-processing logic. Dropbox remains the source of truth for incoming
+invoices, processed originals, review folders, and generated outputs.
+
+The backend endpoints are:
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -348,9 +417,24 @@ lock and run-status store are local to the instance.
 
 **"No files found in Incoming/ folder"** — Make sure PDFs are in `Incoming/`, not a subfolder.
 
-**File appears in Naming Errors/** — Rename it to match: `Supplier InvoiceNum - JobCode.pdf`
+**File appears in Naming Errors/** — Confirm that it is a PDF with a safe,
+usable filename. A complete job code is preferred, but trailing client initials
+such as `JAY` are accepted when the PDF contains the complete code.
+
+**Filename/PDF job conflict** — If the filename ends in one client prefix but
+the PDF contains a different single-job prefix, the invoice is routed to Manual
+Review with `JOB_PREFIX_CONFLICT`.
 
 **Supplier shows as UNKNOWN** — Add the vendor keyword to `SUPPLIER_MAP` in the script.
+
+**Function Point returns 401** — The configured bearer token/API key is missing,
+expired, or invalid. Replace `FP_API_KEY` in DigitalOcean; never put it in the
+frontend or commit it to Git.
+
+**Expense match is ambiguous** — The Function Point job contains more than one
+possible expense type for the supplier hint (for example separate radio R1/R2
+entries). Review it manually or add a confirmed mapping rule; the processor does
+not guess between ambiguous choices.
 
 **Amount shows N/A** — The PDF layout may differ from known patterns; move to Manual Review and add a new extraction pattern.
 

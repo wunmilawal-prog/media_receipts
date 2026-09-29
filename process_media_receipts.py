@@ -213,6 +213,33 @@ def _is_valid_job_code(code):
     return True
 
 
+def _is_obvious_non_job_context(text, match, code):
+    """Reject code-shaped values that clearly belong to non-job PDF text."""
+    prefix = code.split('-', 1)[0]
+    line_start = text.rfind('\n', 0, match.start()) + 1
+    line_end = text.find('\n', match.end())
+    if line_end == -1:
+        line_end = len(text)
+    line = text[line_start:line_end]
+
+    # Addresses such as "P.O. BOX 7400" match the general PREFIX-1234 shape.
+    if prefix == 'BOX' and re.search(
+            r'\bP\s*\.?\s*O\s*\.?\s*BOX\s*[- ]?\s*\d{4}\b',
+            line,
+            re.IGNORECASE):
+        return True
+
+    # Astral format descriptions contain "CMA / RMR 2026". RMR is a market
+    # measurement label here, not a client/job prefix.
+    if prefix == 'RMR' and re.search(
+            r'\bCMA\s*/\s*RMR\s*[- ]?\s*\d{4}\b',
+            line,
+            re.IGNORECASE):
+        return True
+
+    return False
+
+
 def parse_filename_components(filename):
     """
     Parse filename into (supplier_hint, invoice_num, service_group).
@@ -844,10 +871,27 @@ def extract_job_codes(filename, text):
     if text:
         for m in JOB_CODE_PATTERN.finditer(text):
             code = normalize_job_code(m.group(1))
-            if _is_valid_job_code(code):
+            if (_is_valid_job_code(code)
+                    and not _is_obvious_non_job_context(text, m, code)):
                 pdf_codes.add(code)
 
     return sorted(pdf_codes), "pdf"
+
+
+def extract_filename_client_hint(filename):
+    """Return trailing client initials when no complete filename job exists."""
+    name_no_ext = os.path.splitext(os.path.basename(filename))[0].strip()
+    match = re.search(r'(?:^|[\s_-])([A-Z]{2,6})$', name_no_ext, re.IGNORECASE)
+    if not match:
+        return ""
+
+    hint = match.group(1).upper()
+    excluded = NON_JOB_PREFIXES | {
+        'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+        'JUL', 'AUG', 'SEP', 'SEPT', 'OCT', 'NOV', 'DEC',
+        'INVOICE', 'MULTIPLE',
+    }
+    return "" if hint in excluded else hint
 
 
 # ─── Function Point Job / Expense Lookup ─────────────────────────────────────
@@ -1042,8 +1086,8 @@ def invoice_str(inv):
 def validate_filename(filename):
     """
     Validate that a filename is processable.
-    Only flags as a naming error if we truly cannot extract a job code —
-    the naming convention is flexible (dash after supplier is optional, etc.).
+    A missing filename job code is a warning rather than a hard failure because
+    the processor can recover job codes from embedded PDF text.
     Returns (is_valid, issues_list)
     """
     issues = []
@@ -1059,15 +1103,16 @@ def validate_filename(filename):
     if 'multiple' in name_no_ext.lower():
         return True, []
 
-    # Only hard requirement: must have at least one valid job code in the filename
+    # Prefer a complete filename code, but allow PDF inspection when the media
+    # team supplied only trailing client initials such as "JAY".
     has_job = any(
         _is_valid_job_code(normalize_job_code(m.group(1)))
         for m in JOB_CODE_PATTERN.finditer(name_no_ext)
     )
     if not has_job:
-        issues.append("No job code found in filename (expected e.g. DCC-3074, AIRB-3002)")
+        issues.append("No complete job code in filename; PDF text will be checked")
 
-    return len(issues) == 0, issues
+    return True, issues
 
 
 # ─── PDF Text Extraction ──────────────────────────────────────────────────────
@@ -1613,6 +1658,15 @@ def process_receipts():
 
         # ── Step 6: Extract job codes ─────────────────────────────────────
         job_codes, job_source = extract_job_codes(filename, text)
+        filename_client_hint = (
+            extract_filename_client_hint(filename) if job_source == "pdf" else ""
+        )
+        pdf_job_prefixes = {code.split('-', 1)[0] for code in job_codes}
+        job_prefix_conflict = bool(
+            filename_client_hint
+            and len(job_codes) == 1
+            and filename_client_hint not in pdf_job_prefixes
+        )
 
         # ── Step 7: Extract amounts ───────────────────────────────────────
         supplier_key = supplier_display.lower()
@@ -1644,11 +1698,14 @@ def process_receipts():
             flags.append("NO_JOB_CODE")
         if len(job_codes) > 1:
             flags.append("MULTI_JOB")
+        if job_prefix_conflict:
+            flags.append("JOB_PREFIX_CONFLICT")
 
         # Single-job invoices require a confirmed Function Point expense match.
         fp_expense_match = None
         fp_lookup_error = ""
-        if len(job_codes) == 1 and fp_code != "UNKNOWN":
+        if (len(job_codes) == 1 and fp_code != "UNKNOWN"
+                and not job_prefix_conflict):
             job_number = re.sub(r'\D', '', job_codes[0])
             try:
                 fp_job = get_function_point_job(
@@ -1667,6 +1724,8 @@ def process_receipts():
         print(f"    Invoice # : {invoice_num}")
         print(f"    Date      : {expense_date} ({date_confidence})")
         print(f"    Jobs      : {', '.join(job_codes) if job_codes else 'NONE'}")
+        if job_prefix_conflict:
+            print(f"    Job Hint  : filename {filename_client_hint} conflicts with PDF")
         print(f"    Amount    : {currency} {subtotal} | Tax: {tax_amount} ({amt_confidence})")
         if fp_expense_match:
             print(f"    FP Expense: {fp_expense_match['expense_type']} "
@@ -1692,7 +1751,7 @@ def process_receipts():
         elif flags and any(flag in flags for flag in (
                 'UNKNOWN_SUPPLIER', 'NO_INVOICE_NUMBER', 'NO_DATE',
                 'NO_AMOUNT', 'NO_JOB_CODE', 'FP_LOOKUP_FAILED',
-                'GST_CONFLICT')):
+                'GST_CONFLICT', 'JOB_PREFIX_CONFLICT')):
             # Needs manual review
             dest = move_file(filepath, MANUAL_REVIEW_FOLDER)
             print(f"    → Needs review: moved to Manual Review/")
