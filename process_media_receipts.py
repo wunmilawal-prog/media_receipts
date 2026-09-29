@@ -885,6 +885,35 @@ def _normalized_match_value(value):
     return re.sub(r'[^a-z0-9]', '', str(value or '').lower())
 
 
+def _function_point_get(session, url, **kwargs):
+    """GET from FP, retrying once with the alternate Authorization format."""
+    response = session.get(url, **kwargs)
+    if response.status_code != 401:
+        return response
+
+    current_auth = str(session.headers.get("Authorization", "")).strip()
+    if not current_auth:
+        return response
+
+    if current_auth.lower().startswith("bearer "):
+        alternate_auth = current_auth[7:].strip()
+    else:
+        alternate_auth = f"Bearer {current_auth}"
+
+    if not alternate_auth or alternate_auth == current_auth:
+        return response
+
+    retry = session.get(
+        url,
+        headers={"Authorization": alternate_auth},
+        **kwargs,
+    )
+    if retry.status_code != 401:
+        # Reuse the working format for the remaining requests in this batch.
+        session.headers["Authorization"] = alternate_auth
+    return retry
+
+
 def get_function_point_job(job_number, session, cache):
     """
     Retrieve a full Function Point docket (job) by its visible job number.
@@ -898,7 +927,8 @@ def get_function_point_job(job_number, session, cache):
         return cache[job_number]
 
     try:
-        response = session.get(
+        response = _function_point_get(
+            session,
             f"{FP_API_BASE_URL}/dockets",
             params={"number": job_number},
             timeout=FP_API_TIMEOUT_SECONDS,
@@ -938,7 +968,8 @@ def get_function_point_job(job_number, session, cache):
         )
 
     try:
-        response = session.get(
+        response = _function_point_get(
+            session,
             f"{FP_API_BASE_URL}/dockets/{docket_id}",
             timeout=FP_API_TIMEOUT_SECONDS,
         )
@@ -1582,7 +1613,10 @@ def process_receipts():
 
     fp_session = requests.Session()
     fp_session.headers.update({
-        "Authorization": f"Bearer {api_key}",
+        # Admin-created FP API keys use the raw Authorization value described
+        # by the OpenAPI apiKey security scheme. _function_point_get retains
+        # compatibility with older login JWTs by retrying once with Bearer.
+        "Authorization": api_key,
         "Accept": "application/json",
     })
     fp_job_cache = {}

@@ -323,6 +323,10 @@ DROPBOX_MEDIA_ROOT=/Automation Testing
 APP_TIMEZONE=America/Edmonton
 ```
 
+`FP_API_KEY` may be an admin-created API key or an older login JWT. The backend
+sends admin API keys as the raw `Authorization` value and automatically retries
+once with the legacy `Bearer` format if Function Point responds with 401.
+
 The `.env` file is excluded from Git and must not be placed in Dropbox or
 another shared folder.
 

@@ -145,3 +145,21 @@ Remove contextual false positives
         |
         +-- none/unreadable ---> Manual Review or future OCR/Claude fallback
 ```
+
+## 6. Admin Function Point API key returned 401
+
+### Issue
+
+The new long-lived key created in Function Point Admin was stored correctly in
+DigitalOcean, but deployed Preview returned `401 Unauthorized` during
+`GET /dockets?number=...`.
+
+### Cause and solution
+
+Function Point's OpenAPI schema defines the credential as an `apiKey` placed
+directly in the `Authorization` header. The backend previously always prefixed
+the value with `Bearer`, which was designed around login-generated JWTs.
+
+The backend now sends the admin key as the raw `Authorization` value. If that
+request returns 401, it retries once using `Bearer` for compatibility with older
+login JWTs and retains whichever format succeeds for the rest of the batch.
