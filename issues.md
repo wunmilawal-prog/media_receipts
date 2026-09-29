@@ -166,3 +166,25 @@ Authorization: Bearer <admin key>   -> 401 Invalid JWT Token
 
 The backend now identifies login JWTs by their three dot-separated segments.
 JWTs use `Authorization: Bearer`; admin-created keys use `X-API-Key`.
+
+## 7. Astral invoice number and date were missing
+
+### Issue
+
+Astral PDFs use compact bilingual labels that did not match the general
+extractors:
+
+```text
+Invoice / FactureAST/230970
+Date:27 Sept/Sep 2026
+```
+
+This produced `NO_INVOICE_NUMBER; NO_DATE` even though both values were visible.
+
+### Solution
+
+Added general extraction for compact bilingual `Invoice / Facture` identifiers
+and explicitly labelled bilingual `Date:DD Sept/Sep YYYY` values. The filename
+date parser also recognizes both `Sep` and `Sept`, so `Sept 27 2026` remains a
+fallback when the PDF date is missing or unreadable. A labelled PDF date is
+still preferred over campaign or flight-date ranges elsewhere on the invoice.

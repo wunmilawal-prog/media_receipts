@@ -184,7 +184,7 @@ NON_JOB_PREFIXES = {'INV', 'REF', 'PO', 'RT', 'TQ', 'TAX', 'REC', 'CAD', 'USD', 
 INVOICE_LABEL_WORDS = {'inv', 'no', 'no.', 's', 'ref', 'invoice'}
 
 # Month name abbreviations (used to skip date tokens during invoice parsing)
-MONTH_ABBREVS = {'jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec',
+MONTH_ABBREVS = {'jan','feb','mar','apr','may','jun','jul','aug','sep','sept','oct','nov','dec',
                  'january','february','march','april','june','july','august',
                  'september','october','november','december'}
 
@@ -490,6 +490,9 @@ def extract_invoice_number(filename, text):
     # Fallback: scan PDF text for common invoice number patterns
     if text:
         for pat in [
+            # Compact bilingual layout: "Invoice / FactureAST/230970".
+            # The optional letter block is a vendor prefix, not the reference.
+            r'Invoice\s*/\s*Facture\s*(?:[A-Z]{2,6}[/_-])?(\d{5,})',
             r'Invoice\s*(?:ID|#|Number|No\.?)[\s:]+([A-Z0-9][A-Z0-9\-]+)',
             r'Reference\s*Number:\s+([A-Z0-9]+)',
             r'\bINVOICE\s+([A-Z]{2,4}-\d{4,6})\b',
@@ -583,6 +586,25 @@ def extract_date(filename, text):
         except ValueError:
             pass
 
+    # Bilingual layout: "Date:27 Sept/Sep 2026". Read only the explicitly
+    # labelled invoice date so campaign/flight ranges are ignored.
+    bilingual_labelled_date = re.search(
+        r'\bDate\s*:\s*(\d{1,2})\s+'
+        r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)'
+        r'(?:/[A-Za-zÀ-ÿ]+)?\s+(\d{4})\b',
+        text,
+        re.IGNORECASE,
+    )
+    if bilingual_labelled_date:
+        day, month, year = bilingual_labelled_date.groups()
+        if month.casefold() == 'sept':
+            month = 'Sep'
+        try:
+            dt = datetime.strptime(f"{day} {month} {year}", '%d %b %Y')
+            return dt.strftime('%m-%d-%Y'), "HIGH"
+        except ValueError:
+            pass
+
     # Strip lines whose labels indicate a date range or period — not the invoice date.
     # "Invoice Period", "Flight Dates", "Air Dates" etc. are schedule metadata, not billing dates.
     IGNORE_DATE_LABELS = [
@@ -631,11 +653,11 @@ def extract_date(filename, text):
          ['%B %d, %Y', '%B %d %Y']),
 
         # Standalone abbreviated month: "Jan 1, 2026"
-        (r'\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{1,2},?\s+\d{4})\b',
+        (r'\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep(?:t)?|Oct|Nov|Dec)\.?\s+\d{1,2},?\s+\d{4})\b',
          ['%b %d, %Y', '%b. %d, %Y', '%b %d %Y']),
 
         # Day-first abbreviated month: "19 Dec 2025"
-        (r'\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{4})\b',
+        (r'\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep(?:t)?|Oct|Nov|Dec)\.?\s+\d{4})\b',
          ['%d %b %Y', '%d %b. %Y']),
 
         # Compressed day+month+year (no spaces — PDFs where text runs together): "19Dec2025"
@@ -656,6 +678,7 @@ def extract_date(filename, text):
         m = re.search(pat, text, re.IGNORECASE)
         if m:
             raw = m.group(1).strip()
+            raw = re.sub(r'\bSept\b', 'Sep', raw, flags=re.IGNORECASE)
             for fmt in fmts:
                 try:
                     dt = datetime.strptime(raw, fmt)
@@ -673,6 +696,7 @@ def extract_date(filename, text):
         if not m:
             continue
         raw = m.group(1).strip()
+        raw = re.sub(r'\bSept\b', 'Sep', raw, flags=re.IGNORECASE)
         for fmt in fmts:
             try:
                 dt = datetime.strptime(raw, fmt)
