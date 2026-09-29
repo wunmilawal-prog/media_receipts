@@ -914,6 +914,14 @@ def _function_point_get(session, url, **kwargs):
     return retry
 
 
+def _function_point_auth_headers(api_key):
+    """Build FP headers for an admin API key or a login-generated JWT."""
+    api_key = str(api_key or "").strip()
+    if api_key.count('.') == 2:
+        return {"Authorization": f"Bearer {api_key}"}
+    return {"X-API-Key": api_key}
+
+
 def get_function_point_job(job_number, session, cache):
     """
     Retrieve a full Function Point docket (job) by its visible job number.
@@ -1612,13 +1620,8 @@ def process_receipts():
         return
 
     fp_session = requests.Session()
-    fp_session.headers.update({
-        # Admin-created FP API keys use the raw Authorization value described
-        # by the OpenAPI apiKey security scheme. _function_point_get retains
-        # compatibility with older login JWTs by retrying once with Bearer.
-        "Authorization": api_key,
-        "Accept": "application/json",
-    })
+    fp_session.headers.update(_function_point_auth_headers(api_key))
+    fp_session.headers.update({"Accept": "application/json"})
     fp_job_cache = {}
 
     print(f"\nFound {len(all_files)} file(s) to process...\n")

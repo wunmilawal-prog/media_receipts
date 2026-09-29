@@ -156,10 +156,13 @@ DigitalOcean, but deployed Preview returned `401 Unauthorized` during
 
 ### Cause and solution
 
-Function Point's OpenAPI schema defines the credential as an `apiKey` placed
-directly in the `Authorization` header. The backend previously always prefixed
-the value with `Bearer`, which was designed around login-generated JWTs.
+Direct read-only testing of the local annual key confirmed the required formats:
 
-The backend now sends the admin key as the raw `Authorization` value. If that
-request returns 401, it retries once using `Bearer` for compatibility with older
-login JWTs and retains whichever format succeeds for the rest of the batch.
+```text
+X-API-Key: <admin key>              -> 200 OK
+Authorization: <admin key>          -> 401 JWT Token not found
+Authorization: Bearer <admin key>   -> 401 Invalid JWT Token
+```
+
+The backend now identifies login JWTs by their three dot-separated segments.
+JWTs use `Authorization: Bearer`; admin-created keys use `X-API-Key`.

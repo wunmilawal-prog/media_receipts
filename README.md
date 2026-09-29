@@ -324,8 +324,9 @@ APP_TIMEZONE=America/Edmonton
 ```
 
 `FP_API_KEY` may be an admin-created API key or an older login JWT. The backend
-sends admin API keys as the raw `Authorization` value and automatically retries
-once with the legacy `Bearer` format if Function Point responds with 401.
+sends admin keys through `X-API-Key`; login-generated JWTs use
+`Authorization: Bearer`. Do not include either header name or the word `Bearer`
+inside the environment-variable value.
 
 The `.env` file is excluded from Git and must not be placed in Dropbox or
 another shared folder.
